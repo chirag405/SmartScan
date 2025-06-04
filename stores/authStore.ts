@@ -31,7 +31,7 @@ interface AuthActions {
     newPassword: string
   ) => Promise<{ success: boolean; error?: string }>;
   initializeAuth: () => Promise<void>;
-  fetchUserData: () => Promise<void>;
+  fetchUserData: () => Promise<UserData | null>;
   clearError: () => void;
 }
 
@@ -108,8 +108,40 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return { success: false, error: error.message };
       }
 
-      set({ user: data.user, isLoading: false });
-      await get().fetchUserData();
+      // User is signed in with Supabase, now fetch their data from our table
+      const fetchedUserData = await get().fetchUserData();
+
+      if (!fetchedUserData) {
+        // This case implies the user exists in Supabase auth but not in our 'users' table,
+        // or there was an error fetching. Sign them out to be safe.
+        await supabase.auth.signOut();
+        set({
+          error: "Failed to retrieve user details. Please try again.",
+          isLoading: false,
+          user: null,
+          userData: null,
+        });
+        return {
+          success: false,
+          error: "Failed to retrieve user details. Please try again.",
+        };
+      }
+
+      // Check email verification status from our 'users' table
+      if (!fetchedUserData.email_verified) {
+        await supabase.auth.signOut(); // Sign out the user
+        set({
+          error: "Please verify your email before logging in.",
+          isLoading: false,
+          user: null, // Clear user from auth store
+          userData: null, // Clear userData from auth store
+        });
+        return { success: false, error: "Email not verified" };
+      }
+
+      // Email is verified, user data is fetched and set by fetchUserData
+      // The user object from signInWithPassword (data.user) is already set by onAuthStateChange or initial call
+      set({ user: data.user, userData: fetchedUserData, isLoading: false });
       return { success: true };
     } catch (err) {
       const errorMessage =
@@ -228,12 +260,16 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       if (error) {
         console.warn("Failed to fetch user data:", error.message);
-        return;
+        set({ userData: null }); // Clear userData on error
+        return null;
       }
 
       set({ userData: data });
+      return data; // Return the fetched data
     } catch (err) {
       console.warn("Failed to fetch user data:", err);
+      set({ userData: null }); // Clear userData on error
+      return null;
     }
   },
 

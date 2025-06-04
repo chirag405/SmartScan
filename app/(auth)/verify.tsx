@@ -25,8 +25,17 @@ export default function VerifyScreen() {
   }, []);
 
   const handleEmailVerification = async () => {
+    console.log("Attempting email verification...");
+    console.log("Received token_hash:", token_hash);
+    console.log("Received type:", type);
     try {
       if (!token_hash || !type) {
+        console.error(
+          "Verification parameters missing. Token_hash:",
+          token_hash,
+          "Type:",
+          type
+        );
         setVerificationStatus("error");
         setIsLoading(false);
         return;
@@ -34,13 +43,22 @@ export default function VerifyScreen() {
 
       // Handle email verification
       if (type === "email") {
+        console.log(
+          "Calling supabase.auth.verifyOtp with token_hash:",
+          token_hash,
+          "and type:",
+          type
+        );
         const { error } = await supabase.auth.verifyOtp({
           token_hash,
           type: "email",
         });
 
         if (error) {
-          console.error("Email verification error:", error);
+          console.error(
+            "Supabase verifyOtp error object:",
+            JSON.stringify(error, null, 2)
+          ); // Log the full error object
           setVerificationStatus("error");
         } else {
           setVerificationStatus("success");
@@ -51,7 +69,10 @@ export default function VerifyScreen() {
         }
       }
     } catch (error) {
-      console.error("Verification error:", error);
+      console.error(
+        "Caught exception during verification process:",
+        JSON.stringify(error, null, 2)
+      ); // Log the full error object
       setVerificationStatus("error");
     } finally {
       setIsLoading(false);

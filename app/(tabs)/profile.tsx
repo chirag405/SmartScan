@@ -110,6 +110,12 @@ export default function ProfileScreen() {
               {new Date(user.created_at).toLocaleDateString()}
             </Text>
           </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Email Verified:</Text>
+            <Text style={styles.value}>
+              {userData?.email_verified ? "Yes" : "No"}
+            </Text>
+          </View>
         </View>
 
         <View style={styles.card}>

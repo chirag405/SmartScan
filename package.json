@@ -8,7 +8,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "generate-type": "supabase gen types typescript --schema public > ./types.ts"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
