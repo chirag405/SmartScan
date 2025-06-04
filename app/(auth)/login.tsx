@@ -1,42 +1,65 @@
 // app/(auth)/login.tsx
 import { Ionicons } from "@expo/vector-icons";
 import { Link } from "expo-router";
-import { useState } from "react";
+// Removed useState
 import {
   ActivityIndicator,
-  Alert,
-  Dimensions,
+  // Alert, // Not used
+  Dimensions, // Dimensions not used
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
   Text,
-  TextInput,
+  // TextInput, // Not used
   TouchableOpacity,
   View,
 } from "react-native";
 import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
 import { useAuthStore } from "../../stores/authStore";
 
-const { width } = Dimensions.get("window");
+// const { width } = Dimensions.get("window"); // Not used
 
 export default function LoginScreen() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const { signIn, isLoading, error, clearError } = useAuthStore();
+  // Removed email, password, showPassword states
+  // Get the whole store instance for easier access to all states/actions for logging
+  const store = useAuthStore();
 
-  const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert("Error", "Please fill in all fields");
-      return;
+  const handleGoogleSignIn = async () => {
+    console.log("[LoginScreen] handleGoogleSignIn: Called.");
+    store.clearError();
+    try {
+      console.log("[LoginScreen] handleGoogleSignIn: Attempting signInWithGoogle...");
+      // Directly use store's method
+      const result = await store.signInWithGoogle();
+      console.log("[LoginScreen] handleGoogleSignIn: Result from signInWithGoogle:", JSON.stringify(result, null, 2));
+
+      if (result && !result.success) {
+        console.error("[LoginScreen] handleGoogleSignIn: Google Sign-In failed explicitly by result:", result.error);
+        // Error is already set in the store by signInWithGoogle, UI will reflect it using store.error
+      } else if (!result) {
+         console.warn("[LoginScreen] handleGoogleSignIn: signInWithGoogle returned undefined or null result. This might be okay if redirect is immediate.");
+      } else {
+        console.log("[LoginScreen] handleGoogleSignIn: signInWithGoogle call returned success (OAuth flow likely initiated).");
+      }
+    } catch (e) {
+      // This catch block might be redundant if signInWithGoogle itself handles all its errors
+      // and updates the store's error state. However, it can catch unexpected client-side errors.
+      console.error("[LoginScreen] handleGoogleSignIn: Exception during signInWithGoogle call:", e);
+      // Optionally, update store error if not already handled by signInWithGoogle
+      // store.setError("An unexpected error occurred during sign-in attempt.");
+    } finally {
+      // This log shows the client-side store state *immediately after* initiating the OAuth call.
+      // Due to the async nature of OAuth and redirects, the user/userData update will primarily be
+      // logged via onAuthStateChange in authStore.ts *after* the OAuth callback.
+      console.log("[LoginScreen] handleGoogleSignIn: Current store state (isLoading, error) after attempt:", {
+        isLoading: store.isLoading, // Get current isLoading state
+        error: store.error,         // Get current error state
+        user: JSON.stringify(store.user, null, 2), // Log current user from store
+        userData: JSON.stringify(store.userData, null, 2), // Log current userData from store
+      });
     }
-
-    clearError();
-    const result = await signIn(email, password);
-
-    if (!result.success) {
-      Alert.alert("Login Failed", result.error || "An error occurred");
-    }
+    // Navigation upon successful sign-in is typically handled by a listener (e.g., onAuthStateChange in authStore)
+    // or by routing logic observing the user state changes in the application.
   };
 
   return (
@@ -54,7 +77,7 @@ export default function LoginScreen() {
           </View>
           <Text style={styles.title}>Welcome Back</Text>
           <Text style={styles.subtitle}>
-            Sign in to continue with SmartScan
+            Use your Google account to sign in to SmartScan
           </Text>
         </Animated.View>
 
@@ -62,69 +85,22 @@ export default function LoginScreen() {
           entering={FadeInDown.duration(1000).springify()}
           style={styles.form}
         >
-          <View style={styles.inputContainer}>
-            <Ionicons
-              name="mail-outline"
-              size={20}
-              color="#666"
-              style={styles.inputIcon}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Email address"
-              placeholderTextColor="#999"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Ionicons
-              name="lock-closed-outline"
-              size={20}
-              color="#666"
-              style={styles.inputIcon}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="#999"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity
-              onPress={() => setShowPassword(!showPassword)}
-              style={styles.eyeIcon}
-            >
-              <Ionicons
-                name={showPassword ? "eye-outline" : "eye-off-outline"}
-                size={20}
-                color="#666"
-              />
-            </TouchableOpacity>
-          </View>
-
           <TouchableOpacity
-            style={[styles.button, isLoading && styles.buttonDisabled]}
-            onPress={handleLogin}
-            disabled={isLoading}
+            style={[styles.googleButton, store.isLoading && styles.buttonDisabled]}
+            onPress={handleGoogleSignIn}
+            disabled={store.isLoading}
           >
-            {isLoading ? (
+            {store.isLoading ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
               <>
-                <Text style={styles.buttonText}>Sign In</Text>
                 <Ionicons
-                  name="arrow-forward"
+                  name="logo-google"
                   size={20}
                   color="#fff"
-                  style={styles.buttonIcon}
+                  style={styles.buttonIcon} // Will define this style or reuse existing
                 />
+                <Text style={styles.buttonText}>Sign in with Google</Text>
               </>
             )}
           </TouchableOpacity>
@@ -135,15 +111,9 @@ export default function LoginScreen() {
               style={styles.errorContainer}
             >
               <Ionicons name="alert-circle" size={16} color="#ff3b30" />
-              <Text style={styles.errorText}>{error}</Text>
+              <Text style={styles.errorText}>{store.error}</Text>
             </Animated.View>
           )}
-
-          <Link href="/(auth)/reset-password" asChild>
-            <TouchableOpacity style={styles.forgotPasswordButton}>
-              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-            </TouchableOpacity>
-          </Link>
         </Animated.View>
 
         <Animated.View
@@ -204,50 +174,24 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   form: {
-    marginBottom: 32,
+    // marginBottom: 32, // Adjusted as content is less, spacing handled by button margins
   },
-  inputContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: "#1a1a1a",
-    paddingVertical: 16,
-  },
-  eyeIcon: {
-    padding: 4,
-  },
-  button: {
-    backgroundColor: "#007AFF",
+  // inputContainer, inputIcon, input, eyeIcon styles removed
+  googleButton: {
+    backgroundColor: "#007AFF", // Can be changed to Google's red #DB4437 or blue #4285F4
     borderRadius: 16,
     paddingVertical: 18,
     paddingHorizontal: 24,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 8,
     shadowColor: "#007AFF",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 6,
+    marginTop: 20,
+    marginBottom: 20,
   },
   buttonDisabled: {
     backgroundColor: "#94a3b8",
@@ -257,10 +201,10 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
-    marginRight: 8,
+    // marginRight: 8, // Removed as icon is on the left
   },
-  buttonIcon: {
-    marginLeft: 4,
+  buttonIcon: { // For Google icon on the left
+    marginRight: 12,
   },
   errorContainer: {
     flexDirection: "row",
@@ -271,6 +215,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     borderLeftWidth: 4,
     borderLeftColor: "#ff3b30",
+    marginBottom: 16, // Add margin below error message if signupContainer is present
   },
   errorText: {
     color: "#dc2626",
@@ -278,16 +223,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     flex: 1,
   },
-  forgotPasswordButton: {
-    alignItems: "center",
-    marginTop: 24,
-    paddingVertical: 8,
-  },
-  forgotPasswordText: {
-    color: "#007AFF",
-    fontSize: 15,
-    fontWeight: "500",
-  },
+  // forgotPasswordButton, forgotPasswordText styles removed
   signupContainer: {
     flexDirection: "row",
     justifyContent: "center",
@@ -298,6 +234,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: "#e2e8f0",
+    marginTop: 16, // Ensure spacing from error message or button
   },
   signupText: {
     fontSize: 15,

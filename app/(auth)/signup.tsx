@@ -1,63 +1,25 @@
 // app/(auth)/signup.tsx
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons"; // Keep one Ionicons import
 import { Link } from "expo-router";
-import { useState } from "react";
+// Removed useState, ActivityIndicator, Alert, TextInput, useAuthStore
 import {
-  ActivityIndicator,
-  Alert,
-  Dimensions,
+  // Dimensions, // Removed Dimensions
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
-import { useAuthStore } from "../../stores/authStore";
+// Removed useAuthStore
 
-const { width } = Dimensions.get("window");
+// const { width } = Dimensions.get("window"); // Removed width
 
 export default function SignupScreen() {
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const { signUp, isLoading, error, clearError } = useAuthStore();
-
-  const handleSignup = async () => {
-    if (!fullName || !email || !password || !confirmPassword) {
-      Alert.alert("Error", "Please fill in all fields");
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      Alert.alert("Error", "Passwords do not match");
-      return;
-    }
-
-    if (password.length < 6) {
-      Alert.alert("Error", "Password must be at least 6 characters long");
-      return;
-    }
-
-    clearError();
-    const result = await signUp(email, password, fullName);
-
-    if (result.success) {
-      Alert.alert(
-        "Account Created",
-        "Please check your email to verify your account",
-        [{ text: "OK" }]
-      );
-    } else {
-      Alert.alert("Signup Failed", result.error || "An error occurred");
-    }
-  };
+  // Removed all state variables and handleSignup function
+  // Removed signUp, isLoading, error, clearError from useAuthStore
 
   return (
     <KeyboardAvoidingView
@@ -75,140 +37,22 @@ export default function SignupScreen() {
             style={styles.headerContainer}
           >
             <View style={styles.logoContainer}>
-              <Ionicons name="person-add" size={60} color="#007AFF" />
+              <Ionicons name="key-outline" size={60} color="#007AFF" />
             </View>
-            <Text style={styles.title}>Create Account</Text>
+            <Text style={styles.title}>Sign Up / Sign In</Text>
             <Text style={styles.subtitle}>
-              Join SmartScan and start scanning smarter
+              We use Google for a secure and easy sign-in.
             </Text>
           </Animated.View>
 
           <Animated.View
             entering={FadeInDown.duration(1000).springify()}
-            style={styles.form}
+            style={styles.form} // This style might need adjustment or replacement
           >
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="person-outline"
-                size={20}
-                color="#666"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Full Name"
-                placeholderTextColor="#999"
-                value={fullName}
-                onChangeText={setFullName}
-                autoCapitalize="words"
-                autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="mail-outline"
-                size={20}
-                color="#666"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Email address"
-                placeholderTextColor="#999"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="lock-closed-outline"
-                size={20}
-                color="#666"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Password (min 6 characters)"
-                placeholderTextColor="#999"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-              />
-              <TouchableOpacity
-                onPress={() => setShowPassword(!showPassword)}
-                style={styles.eyeIcon}
-              >
-                <Ionicons
-                  name={showPassword ? "eye-outline" : "eye-off-outline"}
-                  size={20}
-                  color="#666"
-                />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={20}
-                color="#666"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Confirm Password"
-                placeholderTextColor="#999"
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                secureTextEntry={!showConfirmPassword}
-                autoCapitalize="none"
-              />
-              <TouchableOpacity
-                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                style={styles.eyeIcon}
-              >
-                <Ionicons
-                  name={showConfirmPassword ? "eye-outline" : "eye-off-outline"}
-                  size={20}
-                  color="#666"
-                />
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.button, isLoading && styles.buttonDisabled]}
-              onPress={handleSignup}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <>
-                  <Text style={styles.buttonText}>Create Account</Text>
-                  <Ionicons
-                    name="arrow-forward"
-                    size={20}
-                    color="#fff"
-                    style={styles.buttonIcon}
-                  />
-                </>
-              )}
-            </TouchableOpacity>
-
-            {error && (
-              <Animated.View
-                entering={FadeInUp.duration(300)}
-                style={styles.errorContainer}
-              >
-                <Ionicons name="alert-circle" size={16} color="#ff3b30" />
-                <Text style={styles.errorText}>{error}</Text>
-              </Animated.View>
-            )}
+            <Text style={styles.infoText}>
+              To create an account or sign in, please proceed to our login page and use Google Sign-In.
+            </Text>
+            {/* Form elements and error display removed */}
           </Animated.View>
 
           <Animated.View
@@ -244,7 +88,7 @@ const styles = StyleSheet.create({
   },
   headerContainer: {
     alignItems: "center",
-    marginBottom: 40,
+    marginBottom: 40, // Keep or adjust as needed
   },
   logoContainer: {
     width: 120,
@@ -273,81 +117,20 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 24,
   },
-  form: {
+  form: { // Re-purpose or simplify this style for the info text container
     marginBottom: 32,
+    alignItems: 'center', // Center the info text
   },
-  inputContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
+  infoText: { // New style for the informational message
     fontSize: 16,
-    color: "#1a1a1a",
-    paddingVertical: 16,
+    color: "#333", // Or another suitable color
+    textAlign: "center",
+    lineHeight: 24,
+    paddingHorizontal: 20, // Add some padding
   },
-  eyeIcon: {
-    padding: 4,
-  },
-  button: {
-    backgroundColor: "#007AFF",
-    borderRadius: 16,
-    paddingVertical: 18,
-    paddingHorizontal: 24,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 8,
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  buttonDisabled: {
-    backgroundColor: "#94a3b8",
-    shadowOpacity: 0.1,
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-    marginRight: 8,
-  },
-  buttonIcon: {
-    marginLeft: 4,
-  },
-  errorContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fef2f2",
-    borderRadius: 12,
-    padding: 12,
-    marginTop: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: "#ff3b30",
-  },
-  errorText: {
-    color: "#dc2626",
-    fontSize: 14,
-    marginLeft: 8,
-    flex: 1,
-  },
+  // Removed: inputContainer, inputIcon, input, eyeIcon,
+  // button, buttonDisabled, buttonText, buttonIcon,
+  // errorContainer, errorText
   loginContainer: {
     flexDirection: "row",
     justifyContent: "center",
