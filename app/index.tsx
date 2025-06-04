@@ -1,34 +1,20 @@
-// app/index.tsx
-import { router } from "expo-router";
-import { useEffect } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
-import { useAuthStore } from "../stores/authStore";
+import { AuthScreen } from "@/components/AuthScreen";
+import { HomeScreen } from "@/components/HomeScreen";
+import { LoadingScreen } from "@/components/LoadingScreen";
+import { useAuth } from "@/hooks/useAuth";
+import { StatusBar } from "expo-status-bar";
 
-export default function Index() {
-  const { user, isInitialized } = useAuthStore();
+export default function App() {
+  const { isAuthenticated, initialized } = useAuth();
 
-  useEffect(() => {
-    if (!isInitialized) return;
-
-    if (user) {
-      router.replace("/(tabs)/home" as any);
-    } else {
-      router.replace("/(auth)/login" as any);
-    }
-  }, [user, isInitialized]);
+  if (!initialized) {
+    return <LoadingScreen />;
+  }
 
   return (
-    <View style={styles.container}>
-      <ActivityIndicator size="large" color="#007AFF" />
-    </View>
+    <>
+      <StatusBar style="auto" />
+      {isAuthenticated ? <HomeScreen /> : <AuthScreen />}
+    </>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#fff",
-  },
-});

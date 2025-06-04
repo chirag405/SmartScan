@@ -1,6 +1,7 @@
 // lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
+import { Database } from "../types";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
@@ -18,11 +19,11 @@ const ExpoSecureStoreAdapter = {
   },
 };
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: ExpoSecureStoreAdapter,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true, // Enable URL detection for email verification
+    detectSessionInUrl: true, // Enable URL detection for OAuth
   },
 });
