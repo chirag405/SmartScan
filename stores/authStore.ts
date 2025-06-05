@@ -1,13 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient } from '@supabase/supabase-js';
+import * as WebBrowser from 'expo-web-browser';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
-
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
+import { supabase } from '../lib/supabaseClient';
 
 interface AuthUser {
   id: string;
@@ -31,72 +26,61 @@ interface AuthState {
 // Custom storage adapter for AsyncStorage
 const AsyncStorageAdapter = {
   getItem: async (name: string) => {
-    const item = await AsyncStorage.getItem(name);
-    return item ? JSON.parse(item) : null;
+    try {
+      const item = await AsyncStorage.getItem(name);
+      return item ? JSON.parse(item) : null;
+    } catch (error) {
+      console.error('AsyncStorage getItem error:', error);
+      return null;
+    }
   },
   setItem: async (name: string, value: any) => {
-    await AsyncStorage.setItem(name, JSON.stringify(value));
+    try {
+      await AsyncStorage.setItem(name, JSON.stringify(value));
+    } catch (error) {
+      console.error('AsyncStorage setItem error:', error);
+    }
   },
   removeItem: async (name: string) => {
-    await AsyncStorage.removeItem(name);
+    try {
+      await AsyncStorage.removeItem(name);
+    } catch (error) {
+      console.error('AsyncStorage removeItem error:', error);
+    }
   },
 };
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => {
-      // Listen for auth changes
-      supabase.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_IN' && session?.user) {
-          const userData = {
-            id: session.user.id,
-            email: session.user.email || '',
-            user_metadata: session.user.user_metadata || {},
-          };
-          set({
-            user: userData,
-            loading: false,
-            error: null
-          });
-        } else if (event === 'SIGNED_OUT') {
-          set({
-            user: null,
-            loading: false,
-            error: null
-          });
-        }
-      });
+      // Initialize auth listener
+      let authListener: { data: { subscription: any } } | null = null;
 
-      return {
-        user: null,
-        loading: false,
-        error: null,
-
-        signInWithGoogle: async () => {
-          try {
-            set({ loading: true });
-            
-            // Initiate Google OAuth flow
-            const { data: { url }, error: authError } = await supabase.auth.signInWithOAuth({
-              provider: 'google',
-              options: {
-                scopes: 'email profile',
-                queryParams: {
-                  access_type: 'offline',
-                },
-                // It's important to specify a redirectTo URL for Supabase to handle the callback correctly in Expo
-                redirectTo: process.env.EXPO_PUBLIC_APP_URL || '',
-              },
+      // Set up auth state listener
+      const initializeAuthListener = () => {
+        authListener = supabase.auth.onAuthStateChange((event, session) => {
+          console.log('Auth state change:', event, session?.user?.id);
+          
+          if (event === 'SIGNED_IN' && session?.user) {
+            const userData: AuthUser = {
+              id: session.user.id,
+              email: session.user.email || '',
+              user_metadata: session.user.user_metadata || {},
+            };
+            set({
+              user: userData,
+              loading: false,
+              error: null
             });
-
-            if (authError) throw authError;
-
-            // Wait for the session to be updated
-            const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-            if (sessionError) throw sessionError;
-
+          } else if (event === 'SIGNED_OUT') {
+            set({
+              user: null,
+              loading: false,
+              error: null
+            });
+          } else if (event === 'TOKEN_REFRESHED') {
             if (session?.user) {
-              const userData = {
+              const userData: AuthUser = {
                 id: session.user.id,
                 email: session.user.email || '',
                 user_metadata: session.user.user_metadata || {},
@@ -107,52 +91,114 @@ export const useAuthStore = create<AuthState>()(
                 error: null
               });
             } else {
+              // Token refresh failed, sign out
               set({
+                user: null,
                 loading: false,
-                error: 'Failed to complete authentication'
+                error: 'Session expired'
               });
             }
+          }
+        });
+      };
+
+      // Initialize the listener
+      initializeAuthListener();
+
+      return {
+        user: null,
+        loading: false,
+        error: null,
+
+        signInWithGoogle: async () => {
+          set({ loading: true, error: null });
+          try {
+            const redirectTo = process.env.EXPO_PUBLIC_APP_URL;
+            if (!redirectTo) {
+              throw new Error("EXPO_PUBLIC_APP_URL is not set in environment variables.");
+            }
+
+            const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
+              provider: 'google',
+              options: {
+                redirectTo,
+                scopes: 'email profile',
+              },
+            });
+
+            if (oauthError) throw oauthError;
+            if (!data.url) throw new Error("No URL returned from signInWithOAuth");
+
+            const browserResult = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+
+            if (browserResult.type === 'success') {
+              const url = new URL(browserResult.url);
+              const hash = url.hash.substring(1); // Remove #
+              const params = new URLSearchParams(hash);
+
+              const access_token = params.get('access_token');
+              const refresh_token = params.get('refresh_token');
+
+              if (access_token && refresh_token) {
+                const { error: sessionError } = await supabase.auth.setSession({
+                  access_token,
+                  refresh_token,
+                });
+
+                if (sessionError) {
+                  console.error('Error setting session:', sessionError);
+                  set({ loading: false, error: `Failed to set session: ${sessionError.message}` });
+                } else {
+                  // Session set successfully, onAuthStateChange will handle the rest
+                  set({ loading: false });
+                }
+              } else {
+                set({ loading: false, error: 'Failed to get tokens from URL' });
+              }
+            } else if (browserResult.type === 'cancel' || browserResult.type === 'dismiss') {
+              set({ loading: false, error: null }); // Don't treat cancellation as an error
+            } else {
+              set({ loading: false, error: 'Authentication failed for an unknown reason.' });
+            }
           } catch (error) {
+            console.error('signInWithGoogle error:', error);
             set({
               loading: false,
-              error: error instanceof Error ? error.message : 'An error occurred during sign in'
+              error: error instanceof Error ? error.message : 'An unexpected error occurred during sign in'
             });
           }
         },
+
         signOut: async () => {
+          set({ loading: true, error: null });
           try {
-            set({ loading: true });
-            await supabase.auth.signOut();
-            set({ 
-              user: null, 
-              loading: false, 
-              error: null 
-            });
-            // Clear persisted state
-            await AsyncStorage.removeItem('auth-storage');
+            const { error } = await supabase.auth.signOut();
+            if (error) throw error;
+            // onAuthStateChange will handle setting user to null and loading to false
           } catch (error: unknown) {
-            set({ 
-              loading: false,
-              error: error instanceof Error ? error.message : 'Failed to sign out' 
-            });
+            console.error('signOut error:', error);
+            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred during sign out';
+            set({ user: null, loading: false, error: errorMessage });
           }
         },
 
         updateUser: (userData: Partial<AuthUser>) => {
           set((state) => {
-            if (!state.user) return { user: null, loading: false, error: null };
+            if (!state.user) return state; // Return current state instead of { user: null }
             return {
+              ...state,
               user: { ...state.user, ...userData },
-              loading: false,
-              error: null
             };
           });
         },
 
-        updateUserProfile: async (profileData: { full_name?: string; avatar_url?: string }) => {
+        updateUserProfile: async (profileData) => {
           try {
             const { user } = get();
-            if (!user) return;
+            if (!user) {
+              set({ error: 'No user logged in' });
+              return;
+            }
 
             const { data: userData, error: updateError } = await supabase
               .from('users')
@@ -163,22 +209,21 @@ export const useAuthStore = create<AuthState>()(
 
             if (updateError) throw updateError;
 
-            set({
-              user: {
-                ...user,
+            // Update the user in the store with the new profile data
+            set((state) => ({
+              ...state,
+              user: state.user ? {
+                ...state.user,
                 user_metadata: {
-                  ...user.user_metadata,
+                  ...state.user.user_metadata,
                   ...profileData,
                 },
-              },
-              loading: false,
-              error: null
-            });
+              } : null,
+              error: null,
+            }));
           } catch (error: unknown) {
-            set({ 
-              loading: false,
-              error: error instanceof Error ? error.message : 'Failed to update profile' 
-            });
+            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+            set((state) => ({ ...state, error: errorMessage }));
           }
         },
       };

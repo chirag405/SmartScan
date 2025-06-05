@@ -1,3 +1,4 @@
+import 'react-native-url-polyfill/auto'; // Added
 // lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
@@ -24,6 +25,6 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     storage: ExpoSecureStoreAdapter,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true, // Enable URL detection for OAuth
+    detectSessionInUrl: false, // Changed to false
   },
 });

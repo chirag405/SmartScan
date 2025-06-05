@@ -19,6 +19,7 @@
     "@react-navigation/native": "^7.1.6",
     "@supabase/supabase-js": "^2.49.10",
     "expo": "~53.0.9",
+    "react-native-url-polyfill": "^2.0.0",
     "expo-auth-session": "^6.1.5",
     "expo-blur": "~14.1.4",
     "expo-constants": "~17.1.6",
