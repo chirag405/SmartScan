@@ -1,20 +1,21 @@
-import { AuthScreen } from "@/components/AuthScreen";
-import { HomeScreen } from "@/components/HomeScreen";
-import { LoadingScreen } from "@/components/LoadingScreen";
-import { useAuth } from "@/hooks/useAuth";
-import { StatusBar } from "expo-status-bar";
+import { View, Text, StyleSheet } from 'react-native';
 
-export default function App() {
-  const { isAuthenticated, initialized } = useAuth();
-
-  if (!initialized) {
-    return <LoadingScreen />;
-  }
-
+export default function Home() {
   return (
-    <>
-      <StatusBar style="auto" />
-      {isAuthenticated ? <HomeScreen /> : <AuthScreen />}
-    </>
+    <View style={styles.container}>
+      <Text style={styles.title}>Welcome to SmartScan</Text>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+});

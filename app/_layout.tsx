@@ -1,14 +1,10 @@
-import { checkEnvironmentConfig, debugAuthConfig } from "@/lib/envCheck";
-import { useEffect } from "react";
+import { AuthLayout } from '../components/ui/AuthLayout'; // Move this to a non-routing folder
 
-export default function RootLayout() {
-  useEffect(() => {
-    // Check environment configuration on app start
-    if (__DEV__) {
-      checkEnvironmentConfig();
-      debugAuthConfig();
-    }
-  }, []);
-
-  return <div>{/* ...existing JSX code... */}</div>;
+export default function Layout() {
+  return (
+    <>
+      <AuthLayout />
+      
+    </>
+  );
 }
