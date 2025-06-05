@@ -44,109 +44,145 @@ const AsyncStorageAdapter = {
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set, get) => ({
-      user: null,
-      loading: false,
-      error: null,
-
-      signInWithGoogle: async () => {
-        try {
-          set({ loading: true });
-          
-          // Initiate Google OAuth flow
-          const { data: { url }, error: authError } = await supabase.auth.signInWithOAuth({
-            provider: 'google',
-            options: {
-              scopes: 'email profile',
-              queryParams: {
-                access_type: 'offline',
-              },
-            },
+    (set, get) => {
+      // Listen for auth changes
+      supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          const userData = {
+            id: session.user.id,
+            email: session.user.email || '',
+            user_metadata: session.user.user_metadata || {},
+          };
+          set({
+            user: userData,
+            loading: false,
+            error: null
           });
+        } else if (event === 'SIGNED_OUT') {
+          set({
+            user: null,
+            loading: false,
+            error: null
+          });
+        }
+      });
 
-          if (authError) throw authError;
+      return {
+        user: null,
+        loading: false,
+        error: null,
 
-          // In React Native/Expo, we don't need to check for URL
-          // The Supabase SDK will handle the OAuth flow automatically
-          
-          // Wait for the session to be updated
-          const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-          if (sessionError) throw sessionError;
+        signInWithGoogle: async () => {
+          try {
+            set({ loading: true });
+            
+            // Initiate Google OAuth flow
+            const { data: { url }, error: authError } = await supabase.auth.signInWithOAuth({
+              provider: 'google',
+              options: {
+                scopes: 'email profile',
+                queryParams: {
+                  access_type: 'offline',
+                },
+                // It's important to specify a redirectTo URL for Supabase to handle the callback correctly in Expo
+                redirectTo: process.env.EXPO_PUBLIC_APP_URL || '',
+              },
+            });
 
-          if (session?.user) {
-            const userData = {
-              id: session.user.id,
-              email: session.user.email || '',
-              user_metadata: session.user.user_metadata || {},
-            };
+            if (authError) throw authError;
+
+            // Wait for the session to be updated
+            const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+            if (sessionError) throw sessionError;
+
+            if (session?.user) {
+              const userData = {
+                id: session.user.id,
+                email: session.user.email || '',
+                user_metadata: session.user.user_metadata || {},
+              };
+              set({
+                user: userData,
+                loading: false,
+                error: null
+              });
+            } else {
+              set({
+                loading: false,
+                error: 'Failed to complete authentication'
+              });
+            }
+          } catch (error) {
             set({
-              user: userData,
+              loading: false,
+              error: error instanceof Error ? error.message : 'An error occurred during sign in'
+            });
+          }
+        },
+        signOut: async () => {
+          try {
+            set({ loading: true });
+            await supabase.auth.signOut();
+            set({ 
+              user: null, 
+              loading: false, 
+              error: null 
+            });
+            // Clear persisted state
+            await AsyncStorage.removeItem('auth-storage');
+          } catch (error: unknown) {
+            set({ 
+              loading: false,
+              error: error instanceof Error ? error.message : 'Failed to sign out' 
+            });
+          }
+        },
+
+        updateUser: (userData: Partial<AuthUser>) => {
+          set((state) => {
+            if (!state.user) return { user: null, loading: false, error: null };
+            return {
+              user: { ...state.user, ...userData },
+              loading: false,
+              error: null
+            };
+          });
+        },
+
+        updateUserProfile: async (profileData: { full_name?: string; avatar_url?: string }) => {
+          try {
+            const { user } = get();
+            if (!user) return;
+
+            const { data: userData, error: updateError } = await supabase
+              .from('users')
+              .update(profileData)
+              .eq('id', user.id)
+              .select()
+              .single();
+
+            if (updateError) throw updateError;
+
+            set({
+              user: {
+                ...user,
+                user_metadata: {
+                  ...user.user_metadata,
+                  ...profileData,
+                },
+              },
               loading: false,
               error: null
             });
-          } else {
-            set({
+          } catch (error: unknown) {
+            set({ 
               loading: false,
-              error: 'Failed to complete authentication'
+              error: error instanceof Error ? error.message : 'Failed to update profile' 
             });
           }
-        } catch (error) {
-          set({
-            loading: false,
-            error: error instanceof Error ? error.message : 'An error occurred during sign in'
-          });
-        }
-      },
-      signOut: async () => {
-        try {
-          await supabase.auth.signOut();
-          set({ user: null });
-          // Clear persisted state
-          await AsyncStorage.removeItem('auth-storage');
-        } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
-          set({ error: errorMessage });
-        }
-      },
-
-      updateUser: (userData: Partial<AuthUser>) => {
-        set((state) => {
-          if (!state.user) return { user: null };
-          return {
-            user: { ...state.user, ...userData },
-          };
-        });
-      },
-
-      updateUserProfile: async (profileData) => {
-        try {
-          const { user } = get();
-          if (!user) return;
-
-          const { data: userData, error: updateError } = await supabase
-            .from('users')
-            .update(profileData)
-            .eq('id', user.id)
-            .select()
-            .single();
-
-          if (updateError) throw updateError;
-
-          set({
-            user: {
-              ...user,
-              user_metadata: {
-                ...user.user_metadata,
-                ...profileData,
-              },
-            },
-          });
-        } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
-          set({ error: errorMessage });
-        }
-      },
-    }),
+        },
+      };
+    },
     {
       name: 'auth-storage',
       storage: AsyncStorageAdapter,
