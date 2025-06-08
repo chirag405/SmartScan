@@ -1,10 +1,21 @@
-import { AuthLayout } from '../components/ui/AuthLayout'; // Move this to a non-routing folder
+import { Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
+import { useColorScheme } from "react-native";
+import "react-native-reanimated";
+import { AuthDebugPanel } from "../components/auth/AuthDebugPanel";
+import { AuthValidator } from "../components/auth/AuthValidator";
 
-export default function Layout() {
+export default function RootLayout() {
+  const colorScheme = useColorScheme();
+
   return (
-    <>
-      <AuthLayout />
-      
-    </>
+    <AuthValidator>
+      <Stack>
+        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      </Stack>
+      <AuthDebugPanel />
+      <StatusBar style="auto" />
+    </AuthValidator>
   );
 }

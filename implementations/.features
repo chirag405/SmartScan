@@ -1,0 +1,74 @@
+# 📱 Key Features Implementation
+
+## 📄 Document Upload (Home Screen)
+
+- **File Picker**: Support for camera, gallery, and file system
+- **Upload Progress**: Show upload status with a progress indicator
+- **Document Preview**: Thumbnail view after upload
+- **Auto-OCR**: Trigger Google Vision API after upload
+- **Status Tracking**: Visual indicators for processing status
+
+---
+
+## 💬 AI Chat (Chat Screen)
+
+### Tools Integration
+
+- `getUserDocuments`: Fetch user's document list
+- `getDocumentById`: Fetch a specific document by ID
+- `searchDocuments`: Vector search through document content
+
+### Chat Features
+
+- **Conversation Memory**: Maintain chat context
+- **Streaming Responses**: Real-time AI responses
+- **Document Cards**: Rich document preview in chat
+
+---
+
+## 👤 Profile Management
+
+- **Google Auth**: Sign in with Google via Supabase
+- **Usage Stats**: Document count, storage used, AI queries
+- **Basic Settings**: Notifications, preferences
+- **Session Management**: Sign out functionality
+
+---
+
+# 🎯 Core User Flows
+
+## 1. 📄 Document Upload Flow
+
+1. User opens app → Home tab → Upload button
+2. Choose source (Camera / Gallery / Files)
+3. Select document → Upload to Supabase Storage
+4. Trigger OCR processing
+5. Update document status
+6. Generate embeddings → Store in database
+
+## 2. 💬 Chat Flow
+
+1. User goes to Chat tab → Types question
+2. AI determines if it needs document access
+3. Uses appropriate tool (search/fetch)
+4. Retrieves relevant documents
+5. Generates response with document context
+6. Displays formatted response
+
+## 3. 🔐 Authentication Flow
+
+1. App launch → Check Supabase session
+2. If not authenticated: Show Google Sign In
+3. On success: Create/update profile
+4. Navigate to Home tab
+
+---
+
+# 🔧 Environment Variables
+
+```env
+EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+GOOGLE_VISION_API_KEY=your_google_vision_key
+OPENAI_API_KEY=your_openai_key
+```

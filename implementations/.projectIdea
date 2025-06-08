@@ -1,0 +1,94 @@
+ScanSmart Minimal - AI-Powered Document Management App
+🎯 Project Overview
+A mobile-first document management app that combines OCR technology with AI assistance to help users organize, search, and interact with their documents through natural language.
+🏗️ Tech Stack
+
+Frontend: React Native with Expo
+Backend: Supabase (PostgreSQL + Auth + Storage)
+AI/OCR: Google Vision API + Vercel AI SDK
+Search: Supabase vector extension
+Authentication: Google OAuth
+
+✨ Core Features
+📱 Document Management
+
+Multi-source Upload: Camera, gallery, and file system integration
+Auto-OCR Processing: Extract text from images and PDFs using Google Vision API
+Smart Categorization: Auto-detect document types (ID cards, bills, receipts, etc.)
+Cloud Storage: Secure document storage with Supabase
+Real-time Status: Visual indicators for upload/processing progress
+
+🤖 AI Chat Assistant
+
+Natural Language Queries: Ask questions about your documents in plain English
+Document Search: Vector-based semantic search through document content
+Smart Retrieval: AI automatically finds relevant documents for your queries
+Contextual Responses: Get detailed answers with document references
+Document Preview: View document snippets directly in chat
+
+👤 User Experience
+
+Google Authentication: Seamless sign-in with Google OAuth
+Usage Analytics: Track documents uploaded, storage used, and AI queries
+Clean Interface: Material Design 3 inspired UI with intuitive navigation
+Cross-platform: Works on both iOS and Android
+
+🎮 User Flows
+Upload & Process
+
+Select document source (camera/gallery/files)
+Upload to secure cloud storage
+Auto-trigger OCR text extraction
+Generate vector embeddings for search
+Categorize and organize automatically
+
+Chat & Search
+
+Ask questions about documents in natural language
+AI determines relevant documents using vector search
+Retrieve and analyze document content
+Provide contextual answers with source references
+Display document previews and details
+
+🚀 MVP Implementation Priority
+Phase 1 - Core Functionality
+
+✅ Google Authentication
+✅ Document upload (camera/gallery/files)
+✅ Google Vision OCR integration
+✅ Basic document list and management
+
+Phase 2 - AI Integration
+
+✅ AI chat interface with document tools
+✅ Vector search implementation
+✅ Document retrieval and preview
+✅ User profile and usage statistics
+
+Phase 3 - Enhanced Features
+
+📋 Advanced document categorization
+🔍 Enhanced search filters
+📊 Detailed analytics dashboard
+🔔 Push notifications for processing status
+
+💡 Use Cases
+
+Personal Document Organization: Store and find personal documents (IDs, bills, receipts)
+Quick Information Retrieval: "What's my PAN number?" or "Show me last month's electricity bill"
+Document Verification: Quickly verify document details without manual searching
+Smart Archiving: Automatically categorize and organize uploaded documents
+
+🎯 Target Audience
+
+Individuals managing personal documents
+Small business owners organizing receipts and invoices
+Students managing academic documents
+Anyone looking to digitize and organize physical documents
+
+🔒 Security Features
+
+Row-level security with Supabase
+Google OAuth authentication
+Secure cloud storage with access controls
+User data isolation and privacy protection

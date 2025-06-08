@@ -1,0 +1,130 @@
+# ✅ Project Guidelines
+
+- i am using expo go on my iphone for testing
+
+## 🔁 Supabase Integration Guidelines
+
+- **Types Handling**: All Supabase types must be stored in `types.ts`.
+- **Schema Change Rule**: If you change anything in Supabase (like schema, functions, or triggers), **do not modify** `types.ts` manually.
+  ask the user to update the schema , or add the function or trigger
+- **Database Logic**: All Supabase-related logic (queries, inserts, updates, triggers) should reside in the `/server` folder and be imported where required (e.g., inside Zustand stores).
+- **Proper Typing**: Always use the correct Supabase types for queries and responses.
+
+-- when u create any function, trigger policy then store it in a structured manner
+like supabase / functions , /policies ,/trigger , /functions
+
+---
+
+-- dont use && in the terminal
+
+## 📁 Project Structure & Code Organization
+
+### 🧭 File & Folder Structure
+
+- Use **file-based routing** properly.
+- Maintain a **clean and modular folder structure**.
+- Group related files in folders (e.g., `components/`, `screens/`, `hooks/`, `stores/`, `server/`).
+- Use `index.ts` files to simplify imports.
+- Follow **kebab-case** for files and **PascalCase** for components.
+
+### 📦 File Naming & Size
+
+- Keep components focused and under 200 lines.
+- Separate concerns clearly: UI, logic, and data must be in separate files.
+
+### ❌ Terminal Usage
+
+- Avoid long chain terminal commands like:  
+  `cd /d:/2025/SmartScan && npm install expo-document-picker`  
+  Instead, break into simple individual steps.
+
+---
+
+## 📦 TypeScript Best Practices
+
+- Enable and use **strict TypeScript configuration**.
+- Define **interfaces** or `types` for all data structures.
+- Avoid the use of `any`; use exact types instead.
+- Use **enums** for constants and status flags.
+- Validate props using TypeScript.
+- Use proper typing for all Supabase-related operations.
+
+---
+
+## ⚛️ React Native Best Practices
+
+- Use **functional components with hooks**.
+- Implement **error boundaries** to catch UI-level issues.
+- Use `React.memo` to avoid unnecessary re-renders.
+- Follow **Expo best practices** for file system and permission handling.
+- Ensure proper **loading states** and **error messages** in UI flows.
+
+---
+
+## 🧠 State Management
+
+- Use **Zustand** for global state management.
+- Fetch data using functions from `/server` and update Zustand stores accordingly.
+
+---
+
+## 🤖 AI Integration Guidelines
+
+- Use **Vercel AI SDK** for AI streaming/chat integration.
+- Implement **tool calling** for document operations (e.g., OCR, summarization).
+- Use **vector** with Supabase for vector embeddings and semantic search.
+- Handle **rate limits** and **API failures** gracefully.
+- Ensure proper **context management** for multi-turn chat flows.
+
+---
+
+## 🧩 Component Design Patterns
+
+- Prefer **composition** over inheritance.
+- Use **reusable components** with consistent props and naming.
+- Use **PascalCase** for all component names.
+- Keep UI clean and decoupled from business logic.
+
+---
+
+## 🎨 Styling & Theming
+
+- Use `StyleSheet.create()` for all component styles.
+- Follow **Material Design 3 / iOS** visual principles.
+- Use **design tokens** for:
+  - Spacing (8pt system: 8, 16, 24, 32px)
+  - Colors:
+    - Primary: `#007AFF`
+    - Success: `#34C759`
+    - Warning: `#FF9500`
+    - Error: `#FF3B30`
+- Implement **responsive design** for various screen sizes.
+
+---
+
+## ❗ Error Handling
+
+- Wrap all async logic in `try-catch` blocks.
+- Use **React error boundaries** to catch rendering issues.
+- Log meaningful errors for debugging.
+- Display **user-friendly error messages** in the UI.
+- Handle **network connectivity** gracefully.
+
+---
+
+## 📝 Documentation
+
+- Comment complex business logic with clear explanations.
+- Document all API interfaces and expected response types.
+- Maintain an up-to-date `README.md` with setup instructions, env variables, and deployment steps.
+- comment above every function or component on what it does
+
+---
+
+## 🚀 Performance Considerations
+
+- Optimize **image uploads** (compression, file size, format).
+- Use **lazy loading** for lists (e.g., documents, images).
+- Implement smart **caching** where possible.
+- Monitor and optimize **memory usage** during OCR or AI operations.
+- Use background task handling properly to ensure smooth UX.

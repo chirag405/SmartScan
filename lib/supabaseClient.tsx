@@ -1,4 +1,4 @@
-import 'react-native-url-polyfill/auto'; // Added
+import "react-native-url-polyfill/auto"; // Added
 // lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
@@ -25,6 +25,40 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     storage: ExpoSecureStoreAdapter,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: false, // Changed to false
+    detectSessionInUrl: false,
+    flowType: "pkce",
   },
 });
+
+// Utility function to clear all Supabase session data
+export const clearSupabaseSession = async () => {
+  try {
+    // Clear from Supabase auth storage
+    const storageKeys = [
+      `sb-${supabaseUrl.split("//")[1].split(".")[0]}-auth-token`,
+      "supabase.auth.token",
+      `supabase-auth-${supabaseUrl}`,
+    ];
+
+    for (const key of storageKeys) {
+      try {
+        await SecureStore.deleteItemAsync(key);
+        console.log(`Cleared SecureStore key: ${key}`);
+      } catch (error) {
+        console.log(`Key not found in SecureStore: ${key}`);
+      }
+    }
+
+    // Also try to sign out from Supabase
+    try {
+      await supabase.auth.signOut();
+      console.log("Supabase sign out completed");
+    } catch (error) {
+      console.log("Supabase sign out failed:", error);
+    }
+
+    console.log("All Supabase session data cleared");
+  } catch (error) {
+    console.error("Error clearing Supabase session:", error);
+  }
+};
