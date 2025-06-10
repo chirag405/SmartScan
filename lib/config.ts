@@ -2,12 +2,17 @@ import Constants from "expo-constants";
 
 // Environment configuration for React Native
 export const config = {
-  // Google Cloud Vision API - Note: Direct API calls from React Native require API key authentication
-  googleVision: {
+  // Eden AI - OCR & Document Processing
+  edenAI: {
     apiKey:
-      Constants.expoConfig?.extra?.googleVisionApiKey ||
-      process.env.EXPO_PUBLIC_GOOGLE_VISION_API_KEY,
-    endpoint: "https://vision.googleapis.com/v1/images:annotate",
+      Constants.expoConfig?.extra?.edenAiApiKey ||
+      process.env.EXPO_PUBLIC_EDEN_AI_API_KEY,
+    // Synchronous OCR endpoint for images
+    ocrEndpoint: "https://api.edenai.run/v2/ocr/ocr",
+    // Asynchronous OCR endpoint for multipage PDFs
+    ocrAsyncEndpoint: "https://api.edenai.run/v2/ocr/ocr_async",
+    // Get async OCR results endpoint
+    ocrAsyncResultEndpoint: "https://api.edenai.run/v2/ocr/ocr_async",
   },
 
   // OpenAI API
@@ -49,8 +54,8 @@ export const config = {
 export const validateConfig = () => {
   const errors: string[] = [];
 
-  if (!config.googleVision.apiKey) {
-    errors.push("Google Vision API key is required");
+  if (!config.edenAI.apiKey) {
+    errors.push("Eden AI API key is required");
   }
 
   if (!config.openai.apiKey) {
@@ -78,8 +83,8 @@ export const logConfigStatus = () => {
   if (__DEV__) {
     console.log("📋 Configuration Status:");
     console.log(
-      "- Google Vision API:",
-      config.googleVision.apiKey ? "✅ Configured" : "❌ Missing"
+      "- Eden AI API:",
+      config.edenAI.apiKey ? "✅ Configured" : "❌ Missing"
     );
     console.log(
       "- OpenAI API:",

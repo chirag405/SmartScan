@@ -1,57 +1,31 @@
 import { router } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { StyleSheet, useColorScheme, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { GoogleSignInButton } from "../auth/GoogleSignInButton";
 import { LoadingScreen } from "../common/LoadingScreen";
+import { useAuthStore } from "../../stores/authStore";
 
 export const AuthLayout: React.FC = () => {
   const colorScheme = useColorScheme();
-  const [isLoading, setIsLoading] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { user, loading, initialized, signInWithGoogle } = useAuthStore();
 
   useEffect(() => {
-    // TODO: Check authentication status
-    checkAuthStatus();
-  }, []);
-
-  const checkAuthStatus = async () => {
-    try {
-      // TODO: Implement actual auth check with Supabase
-      // For now, simulate checking auth status
-      setIsLoading(true);
-
-      // Simulate auth check delay
-      setTimeout(() => {
-        setIsLoading(false);
-        // For demo purposes, redirect to tabs
-        // In real implementation, check actual auth status
-        router.replace("/(tabs)");
-      }, 1000);
-    } catch (error) {
-      console.error("Auth check failed:", error);
-      setIsLoading(false);
+    if (initialized && user) {
+      router.replace("/(tabs)");
     }
-  };
+  }, [initialized, user]);
 
   const handleGoogleSignIn = async () => {
     try {
-      setIsLoading(true);
-      // TODO: Implement Google Sign In with Supabase
-      console.log("Google Sign In pressed");
-
-      // Simulate sign in delay
-      setTimeout(() => {
-        setIsLoading(false);
-        router.replace("/(tabs)");
-      }, 2000);
+      await signInWithGoogle();
     } catch (error) {
       console.error("Sign in failed:", error);
-      setIsLoading(false);
+      // Optionally, handle the error in the UI, e.g., show a message
     }
   };
 
-  if (isLoading) {
+  if (!initialized || loading) {
     return <LoadingScreen />;
   }
 
@@ -66,7 +40,7 @@ export const AuthLayout: React.FC = () => {
         <View style={styles.authSection}>
           <GoogleSignInButton
             onPress={handleGoogleSignIn}
-            loading={isLoading}
+            loading={loading}
           />
         </View>
       </View>

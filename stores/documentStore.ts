@@ -270,11 +270,20 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   deleteDocument: async (documentId: string) => {
     try {
+      // Save user ID before deleting the document to use for refreshing stats
+      const document = get().documents.find((doc) => doc.id === documentId);
+      const userId = document?.user_id;
+
       const success = await documentQueries.deleteDocument(documentId);
       if (success) {
         set((state) => ({
           documents: state.documents.filter((doc) => doc.id !== documentId),
         }));
+
+        // If we have the user ID, refresh the stats to reflect the updated count and storage
+        if (userId) {
+          await get().fetchUserStats(userId);
+        }
       } else {
         throw new Error("Failed to delete document");
       }
@@ -374,7 +383,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   reprocessDocument: async (documentId: string) => {
     try {
-      const success = await documentQueries.reprocessDocument(documentId);
+      const success = await documentQueries.retryDocumentProcessing(documentId);
       if (success) {
         // Refresh documents to get updated status
         const currentDocuments = get().documents;
@@ -413,7 +422,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   retryDocumentProcessing: async (documentId: string): Promise<boolean> => {
     set({ loading: true, error: null });
     try {
-      const success = await documentQueries.reprocessDocument(documentId);
+      const success = await documentQueries.retryDocumentProcessing(documentId);
 
       if (success) {
         // Refresh documents list to get updated status

@@ -80,8 +80,8 @@ export const GoogleSignInNative: React.FC<GoogleSignInNativeProps> = ({
 
         if (data?.user) {
           console.log("✅ Authentication successful:", data.user.email);
-          // The auth listener will handle setting the user state
-          useAuthStore.setState({ loading: false });
+          // Let the auth listener handle setting the user state and loading
+          // Don't set loading to false here - it will be handled by the auth listener
         } else {
           throw new Error("No user data returned from Supabase");
         }

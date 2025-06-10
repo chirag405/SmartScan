@@ -1,581 +1,411 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  ScrollView,
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useColorScheme,
   View,
 } from "react-native";
 import { useAuthStore } from "../../stores/authStore";
 import { useDocumentStore } from "../../stores/documentStore";
 
+type UploadMethod = "document" | "camera" | "gallery" | null;
+
 interface DocumentUploaderProps {
   onUploadComplete?: (documentId: string) => void;
-  maxFileSize?: number; // in MB
-  allowedTypes?: string[];
 }
 
 export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
   onUploadComplete,
-  maxFileSize = 50, // 50MB default
-  allowedTypes = [
-    "image/*",
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "text/plain",
-  ],
 }) => {
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{
-    [key: string]: number;
-  }>({});
-
-  const { uploadAndProcessDocument, loading, error } = useDocumentStore();
+  const colorScheme = useColorScheme();
+  const [uploading, setUploading] = useState(false);
+  const [uploadMethod, setUploadMethod] = useState<UploadMethod>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const { uploadAndProcessDocument } = useDocumentStore();
   const { user } = useAuthStore();
 
-  const convertUriToBlob = async (
-    uri: string,
-    mimeType: string
-  ): Promise<Blob> => {
+  const textColor = colorScheme === "dark" ? "#FFFFFF" : "#000000";
+  const backgroundColor = colorScheme === "dark" ? "#1C1C1E" : "#F2F2F7";
+  const cardBackground = colorScheme === "dark" ? "#2C2C2E" : "#FFFFFF";
+  const buttonBackground = colorScheme === "dark" ? "#2C2C2E" : "#F2F2F7";
+
+  const handleUpload = async (method: UploadMethod) => {
     try {
-      console.log("Converting URI to blob:", { uri, mimeType });
+      setUploadMethod(method);
+      setUploading(true);
+      setUploadProgress(0);
 
-      const response = await fetch(uri);
-      if (!response.ok) {
-        throw new Error(
-          `Failed to fetch file: ${response.status} ${response.statusText}`
-        );
+      if (!user) {
+        Alert.alert("Error", "You must be logged in to upload documents");
+        setUploading(false);
+        return;
       }
 
-      const blob = await response.blob();
+      let result;
 
-      console.log("Blob created:", {
-        size: blob.size,
-        type: blob.type,
-      });
+      switch (method) {
+        case "document":
+          // Pick a document
+          result = await DocumentPicker.getDocumentAsync({
+            type: [
+              "application/pdf",
+              "image/jpeg",
+              "image/png",
+              "text/plain",
+              "application/msword",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ],
+            copyToCacheDirectory: true,
+          });
+          break;
 
-      if (blob.size === 0) {
-        throw new Error("File could not be read or is empty");
-      }
+        case "camera":
+          // Take a photo
+          const cameraPermission =
+            await ImagePicker.requestCameraPermissionsAsync();
+          if (!cameraPermission.granted) {
+            Alert.alert(
+              "Permission Required",
+              "Camera permission is needed to take photos"
+            );
+            setUploading(false);
+            return;
+          }
 
-      return blob;
-    } catch (error) {
-      console.error("Error converting URI to blob:", error);
-      throw new Error(
-        `Failed to convert file: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
-    }
-  };
+          result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 0.8,
+            allowsEditing: true,
+          });
+          break;
 
-  const validateFile = (file: {
-    size: number;
-    mimeType: string;
-    name: string;
-  }) => {
-    // Check if file data is valid
-    if (!file.size || file.size === 0) {
-      Alert.alert(
-        "Invalid File",
-        "The selected file appears to be empty or corrupted. Please try selecting a different file."
-      );
-      return false;
-    }
+        case "gallery":
+          // Pick from photo library
+          const galleryPermission =
+            await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!galleryPermission.granted) {
+            Alert.alert(
+              "Permission Required",
+              "Photo library permission is needed to select images"
+            );
+            setUploading(false);
+            return;
+          }
 
-    // Check file size
-    const fileSizeMB = file.size / (1024 * 1024);
-    if (fileSizeMB > maxFileSize) {
-      Alert.alert(
-        "File Too Large",
-        `File size (${fileSizeMB.toFixed(
-          2
-        )}MB) exceeds the maximum allowed size of ${maxFileSize}MB. Please choose a smaller file or compress the current one.`
-      );
-      return false;
-    }
+          result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 0.8,
+            allowsEditing: true,
+          });
+          break;
 
-    // Normalize MIME type for better compatibility
-    let normalizedMimeType = file.mimeType?.toLowerCase() || "";
-
-    // Handle common MIME type variations
-    if (!normalizedMimeType) {
-      // Try to determine MIME type from file extension
-      const extension = file.name.toLowerCase().split(".").pop();
-      switch (extension) {
-        case "jpg":
-        case "jpeg":
-          normalizedMimeType = "image/jpeg";
-          break;
-        case "png":
-          normalizedMimeType = "image/png";
-          break;
-        case "gif":
-          normalizedMimeType = "image/gif";
-          break;
-        case "pdf":
-          normalizedMimeType = "application/pdf";
-          break;
-        case "txt":
-          normalizedMimeType = "text/plain";
-          break;
-        case "doc":
-          normalizedMimeType = "application/msword";
-          break;
-        case "docx":
-          normalizedMimeType =
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-          break;
         default:
-          normalizedMimeType = "application/octet-stream";
-      }
-    }
-
-    // Check file type with improved logic
-    const isAllowedType = allowedTypes.some((type) => {
-      if (type.includes("*")) {
-        const baseType = type.split("/")[0];
-        return normalizedMimeType.startsWith(baseType);
-      }
-      return normalizedMimeType === type;
-    });
-
-    if (!isAllowedType) {
-      const supportedTypesText = allowedTypes
-        .map((type) => {
-          if (type.includes("image")) return "Images (JPEG, PNG, GIF, etc.)";
-          if (type.includes("pdf")) return "PDF documents";
-          if (type.includes("msword")) return "Word documents";
-          if (type.includes("text")) return "Text files";
-          return type;
-        })
-        .filter((value, index, self) => self.indexOf(value) === index)
-        .join(", ");
-
-      Alert.alert(
-        "Unsupported File Type",
-        `File type "${normalizedMimeType}" is not supported.\n\nSupported formats:\n${supportedTypesText}`
-      );
-      return false;
-    }
-
-    return true;
-  };
-
-  const handleDocumentUpload = async (
-    file: Blob,
-    filename: string,
-    mimeType: string
-  ) => {
-    if (!user?.id) {
-      Alert.alert("Error", "Please log in to upload documents.");
-      return;
-    }
-
-    try {
-      setIsUploading(true);
-
-      // Debug: Log file information
-      console.log("File upload details:", {
-        filename,
-        mimeType,
-        fileSize: file.size,
-        fileType: file.type,
-      });
-
-      // Validate file size before upload
-      if (file.size === 0) {
-        throw new Error("File is empty or could not be read properly");
+          setUploading(false);
+          return;
       }
 
-      // Create a File-like object for the upload
-      const fileObject = new File([file], filename, { type: mimeType });
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        setUploading(false);
+        return;
+      }
 
-      // Double-check the file object
-      console.log("Created file object:", {
-        name: fileObject.name,
-        size: fileObject.size,
-        type: fileObject.type,
-      });
+      const asset = result.assets[0];
+      const fileUri = asset.uri;
+      const fileName =
+        "name" in asset
+          ? asset.name
+          : fileUri.split("/").pop() ||
+            `document-${Date.now()}.${fileUri.split(".").pop()}`;
 
-      const document = await uploadAndProcessDocument(
-        fileObject,
-        user.id,
-        filename,
-        user.email
-      );
+      // Read the file as a blob
+      const fileInfo = await FileSystem.getInfoAsync(fileUri);
 
-      if (document) {
+      if (!fileInfo.exists) {
         Alert.alert(
-          "Upload Successful",
-          "Your document has been uploaded and is being processed. You'll be notified when processing is complete.",
+          "Error",
+          "The selected file does not exist or is inaccessible"
+        );
+        setUploading(false);
+        return;
+      }
+
+      // Check file size (limit to 50MB)
+      const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB in bytes
+      if (fileInfo.size > MAX_FILE_SIZE) {
+        Alert.alert("Error", "File is too large (maximum 50MB)");
+        setUploading(false);
+        return;
+      }
+
+      // Read file as blob
+      const fileBlob = await readFileAsBlob(fileUri);
+      if (!fileBlob) {
+        Alert.alert("Error", "Failed to read file");
+        setUploading(false);
+        return;
+      }
+
+      // Start upload with progress tracking
+      try {
+        // Upload to Supabase via our document store
+        const document = await uploadAndProcessDocument(
+          fileBlob,
+          user.id,
+          fileName,
+          user.email
+        );
+
+        // Success!
+        Alert.alert(
+          "Success",
+          "Document uploaded successfully. Processing will happen in the background.",
           [
             {
               text: "OK",
-              onPress: () => onUploadComplete?.(document.id),
+              onPress: () => {
+                if (document && onUploadComplete) {
+                  onUploadComplete(document.id);
+                }
+              },
             },
           ]
         );
-      } else {
-        throw new Error("Failed to upload document");
+      } catch (error) {
+        console.error("Upload error:", error);
+        Alert.alert(
+          "Upload Failed",
+          error instanceof Error ? error.message : "An unknown error occurred"
+        );
+      } finally {
+        setUploading(false);
+        setUploadProgress(0);
+        setUploadMethod(null);
       }
     } catch (error) {
-      console.error("Upload error:", error);
+      console.error("Error in handleUpload:", error);
       Alert.alert(
-        "Upload Failed",
-        error instanceof Error
-          ? error.message
-          : "An unexpected error occurred during upload."
+        "Error",
+        error instanceof Error ? error.message : "An unknown error occurred"
       );
-    } finally {
-      setIsUploading(false);
+      setUploading(false);
+      setUploadProgress(0);
+      setUploadMethod(null);
     }
   };
 
-  const pickDocument = async () => {
+  // Helper function to read file as Blob or File
+  const readFileAsBlob = async (uri: string): Promise<Blob | File | null> => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: allowedTypes,
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
+      if (Platform.OS === "web") {
+        // On web, fetch the file and convert to blob
+        const response = await fetch(uri);
+        return await response.blob();
+      } else {
+        // On native, we can't create a proper Blob, so we'll use the file URI directly
+        // and handle it in the backend with special processing for file URIs
+        const fileInfo = await FileSystem.getInfoAsync(uri);
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-
-        if (
-          !validateFile({
-            size: asset.size || 0,
-            mimeType: asset.mimeType || "application/octet-stream",
-            name: asset.name,
-          })
-        ) {
-          return;
-        }
-
-        const blob = await convertUriToBlob(
-          asset.uri,
-          asset.mimeType || "application/octet-stream"
-        );
-        await handleDocumentUpload(
-          blob,
-          asset.name,
-          asset.mimeType || "application/octet-stream"
-        );
+        // Create a File-like object that can be sent to the server
+        // This isn't a real File/Blob but will be handled specially by uploadAndProcessDocument
+        return {
+          uri: uri,
+          name: uri.split("/").pop() || "file",
+          type: uri.endsWith(".pdf")
+            ? "application/pdf"
+            : uri.endsWith(".jpg") || uri.endsWith(".jpeg")
+              ? "image/jpeg"
+              : uri.endsWith(".png")
+                ? "image/png"
+                : "application/octet-stream",
+          size: "size" in fileInfo ? fileInfo.size : 0,
+        } as any;
       }
     } catch (error) {
-      console.error("Document picker error:", error);
-      Alert.alert("Error", "Failed to pick document. Please try again.");
+      console.error("Error reading file:", error);
+      return null;
     }
   };
 
-  const pickImage = async () => {
-    try {
-      // Request camera roll permissions
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert(
-          "Permission Required",
-          "Please grant permission to access your photo library to upload images."
-        );
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: false,
-        quality: 0.8,
-        exif: false,
-      });
-
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-
-        if (
-          !validateFile({
-            size: asset.fileSize || 0,
-            mimeType: "image/jpeg",
-            name: asset.fileName || `image_${Date.now()}.jpg`,
-          })
-        ) {
-          return;
-        }
-
-        const blob = await convertUriToBlob(asset.uri, "image/jpeg");
-        await handleDocumentUpload(
-          blob,
-          asset.fileName || `image_${Date.now()}.jpg`,
-          "image/jpeg"
-        );
-      }
-    } catch (error) {
-      console.error("Image picker error:", error);
-      Alert.alert("Error", "Failed to pick image. Please try again.");
-    }
-  };
-
-  const takePhoto = async () => {
-    try {
-      // Request camera permissions
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert(
-          "Permission Required",
-          "Please grant permission to access your camera to take photos."
-        );
-        return;
-      }
-
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: false,
-        quality: 0.8,
-        exif: false,
-      });
-
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-
-        if (
-          !validateFile({
-            size: asset.fileSize || 0,
-            mimeType: "image/jpeg",
-            name: `camera_${Date.now()}.jpg`,
-          })
-        ) {
-          return;
-        }
-
-        const blob = await convertUriToBlob(asset.uri, "image/jpeg");
-        await handleDocumentUpload(
-          blob,
-          `camera_${Date.now()}.jpg`,
-          "image/jpeg"
-        );
-      }
-    } catch (error) {
-      console.error("Camera error:", error);
-      Alert.alert("Error", "Failed to take photo. Please try again.");
+  const getMethodLabel = (method: UploadMethod): string => {
+    switch (method) {
+      case "document":
+        return "Uploading document...";
+      case "camera":
+        return "Uploading photo...";
+      case "gallery":
+        return "Uploading image...";
+      default:
+        return "Uploading...";
     }
   };
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Upload Document</Text>
-        <Text style={styles.subtitle}>
-          Choose a document, image, or take a photo to extract text and make it
-          searchable
+    <View style={[styles.container, { backgroundColor }]}>
+      <View style={[styles.card, { backgroundColor: cardBackground }]}>
+        <Text style={[styles.title, { color: textColor }]}>
+          Upload Document
         </Text>
-      </View>
 
-      <View style={styles.optionsContainer}>
-        <TouchableOpacity
-          style={[
-            styles.optionButton,
-            isUploading && styles.optionButtonDisabled,
-          ]}
-          onPress={pickDocument}
-          disabled={isUploading || loading}
-        >
-          <View style={styles.optionContent}>
-            <Ionicons name="document-outline" size={32} color="#007AFF" />
-            <Text style={styles.optionTitle}>Choose Document</Text>
-            <Text style={styles.optionDescription}>
-              Select PDF, Word, or text files from your device
+        {uploading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <Text style={[styles.loadingText, { color: textColor }]}>
+              {getMethodLabel(uploadMethod)}
             </Text>
+            {uploadProgress > 0 && (
+              <View style={styles.progressContainer}>
+                <View
+                  style={[
+                    styles.progressBar,
+                    { width: `${uploadProgress}%`, backgroundColor: "#007AFF" },
+                  ]}
+                />
+                <Text style={styles.progressText}>
+                  {Math.round(uploadProgress)}%
+                </Text>
+              </View>
+            )}
           </View>
-        </TouchableOpacity>
+        ) : (
+          <View style={styles.buttonsContainer}>
+            <TouchableOpacity
+              style={[styles.button, { backgroundColor: buttonBackground }]}
+              onPress={() => handleUpload("document")}
+            >
+              <View>
+                <Ionicons name="document-text" size={24} color="#007AFF" />
+                <Text style={[styles.buttonText, { color: textColor }]}>
+                  Choose File
+                </Text>
+              </View>
+            </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[
-            styles.optionButton,
-            isUploading && styles.optionButtonDisabled,
-          ]}
-          onPress={pickImage}
-          disabled={isUploading || loading}
-        >
-          <View style={styles.optionContent}>
-            <Ionicons name="image-outline" size={32} color="#007AFF" />
-            <Text style={styles.optionTitle}>Choose Image</Text>
-            <Text style={styles.optionDescription}>
-              Select images from your photo library
-            </Text>
+            <TouchableOpacity
+              style={[styles.button, { backgroundColor: buttonBackground }]}
+              onPress={() => handleUpload("camera")}
+            >
+              <View>
+                <Ionicons name="camera" size={24} color="#007AFF" />
+                <Text style={[styles.buttonText, { color: textColor }]}>
+                  Take Photo
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.button, { backgroundColor: buttonBackground }]}
+              onPress={() => handleUpload("gallery")}
+            >
+              <View>
+                <Ionicons name="images" size={24} color="#007AFF" />
+                <Text style={[styles.buttonText, { color: textColor }]}>
+                  From Gallery
+                </Text>
+              </View>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        )}
 
-        <TouchableOpacity
-          style={[
-            styles.optionButton,
-            isUploading && styles.optionButtonDisabled,
-          ]}
-          onPress={takePhoto}
-          disabled={isUploading || loading}
-        >
-          <View style={styles.optionContent}>
-            <Ionicons name="camera-outline" size={32} color="#007AFF" />
-            <Text style={styles.optionTitle}>Take Photo</Text>
-            <Text style={styles.optionDescription}>
-              Use your camera to capture a document
-            </Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {(isUploading || loading) && (
-        <View style={styles.uploadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.uploadingText}>
-            {isUploading ? "Uploading document..." : "Processing document..."}
-          </Text>
-          <Text style={styles.uploadingSubtext}>
-            This may take a few moments. We're extracting text and making it
-            searchable.
+        <View style={styles.supportedContainer}>
+          <Text
+            style={[
+              styles.supportedText,
+              { color: colorScheme === "dark" ? "#8E8E93" : "#8E8E93" },
+            ]}
+          >
+            Supported formats: PDF, JPG, PNG, TXT, DOC, DOCX
           </Text>
         </View>
-      )}
-
-      {error && (
-        <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle-outline" size={20} color="#FF3B30" />
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      )}
-
-      <View style={styles.infoContainer}>
-        <Text style={styles.infoTitle}>Supported Formats</Text>
-        <Text style={styles.infoText}>
-          • Images: JPEG, PNG, GIF, BMP{"\n"}• Documents: PDF, Word (.doc,
-          .docx){"\n"}• Text: Plain text files{"\n"}• Maximum file size:{" "}
-          {maxFileSize}MB
-        </Text>
       </View>
-    </ScrollView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    backgroundColor: "#f8f9fa",
+    padding: 16,
+    borderRadius: 12,
   },
-  header: {
-    padding: 24,
-    backgroundColor: "white",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e9ecef",
+  card: {
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+    elevation: 2,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#212529",
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: "#6c757d",
-    lineHeight: 24,
-  },
-  optionsContainer: {
-    padding: 16,
-    gap: 12,
-  },
-  optionButton: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: "#e9ecef",
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-  optionButtonDisabled: {
-    opacity: 0.6,
-  },
-  optionContent: {
-    alignItems: "center",
-  },
-  optionTitle: {
     fontSize: 18,
-    fontWeight: "600",
-    color: "#212529",
-    marginTop: 12,
-    marginBottom: 8,
-  },
-  optionDescription: {
-    fontSize: 14,
-    color: "#6c757d",
+    fontWeight: "bold",
+    marginBottom: 16,
     textAlign: "center",
-    lineHeight: 20,
   },
-  uploadingContainer: {
-    backgroundColor: "white",
-    margin: 16,
-    padding: 24,
-    borderRadius: 12,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#e9ecef",
-  },
-  uploadingText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#212529",
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  uploadingSubtext: {
-    fontSize: 14,
-    color: "#6c757d",
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  errorContainer: {
-    backgroundColor: "#fff5f5",
-    margin: 16,
-    padding: 16,
-    borderRadius: 8,
+  buttonsContainer: {
     flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#fed7d7",
+    justifyContent: "space-between",
+    marginBottom: 16,
   },
-  errorText: {
-    fontSize: 14,
-    color: "#c53030",
-    marginLeft: 8,
+  button: {
     flex: 1,
+    margin: 4,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  infoContainer: {
-    backgroundColor: "white",
-    margin: 16,
-    padding: 20,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#e9ecef",
+  buttonText: {
+    marginTop: 8,
+    fontSize: 12,
+    textAlign: "center",
   },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#212529",
-    marginBottom: 12,
+  loadingContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
   },
-  infoText: {
+  loadingText: {
+    marginTop: 8,
     fontSize: 14,
-    color: "#6c757d",
-    lineHeight: 20,
+  },
+  progressContainer: {
+    width: "100%",
+    height: 10,
+    backgroundColor: "#E1E1E1",
+    borderRadius: 5,
+    marginTop: 16,
+    overflow: "hidden",
+    position: "relative",
+  },
+  progressBar: {
+    height: "100%",
+    position: "absolute",
+    left: 0,
+    top: 0,
+    borderRadius: 5,
+  },
+  progressText: {
+    position: "absolute",
+    right: 0,
+    top: 12,
+    fontSize: 12,
+    color: "#8E8E93",
+  },
+  supportedContainer: {
+    marginTop: 16,
+    alignItems: "center",
+  },
+  supportedText: {
+    fontSize: 12,
   },
 });
+
+// No default export needed since we're using named export
