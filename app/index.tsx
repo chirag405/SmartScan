@@ -10,10 +10,12 @@ export default function Index() {
   const [hasRedirected, setHasRedirected] = useState(false);
   const [redirectAttempts, setRedirectAttempts] = useState(0);
   const [navigationFailed, setNavigationFailed] = useState(false);
+  const [stuckInLoading, setStuckInLoading] = useState(false);
 
   // Use ref with any type to avoid TypeScript issues with different timeout types
   const redirectTimeoutRef = useRef<any>(null);
   const safetyTimeoutRef = useRef<any>(null);
+  const loadingTimeoutRef = useRef<any>(null);
 
   // Clear any previous redirect timeouts
   const clearTimeouts = useCallback(() => {
@@ -24,6 +26,10 @@ export default function Index() {
     if (safetyTimeoutRef.current) {
       clearTimeout(safetyTimeoutRef.current);
       safetyTimeoutRef.current = null;
+    }
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
     }
   }, []);
 
@@ -36,6 +42,7 @@ export default function Index() {
       setHasRedirected(false);
       setRedirectAttempts(0);
       setNavigationFailed(false);
+      setStuckInLoading(false);
       useAuthStore.setState({ loading: false });
 
       // Use a short timeout to allow state updates to process
@@ -68,12 +75,41 @@ export default function Index() {
     }
   }, []);
 
+  // Add a new function to handle loading state timeout
+  const setupLoadingTimeout = useCallback(() => {
+    // Clear any previous loading timeout
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+    }
+
+    // Set a timeout to reset loading state if it's stuck
+    loadingTimeoutRef.current = setTimeout(() => {
+      const { loading: currentLoading } = useAuthStore.getState();
+      if (currentLoading) {
+        console.log("⚠️ Loading state appears stuck, forcing reset");
+        useAuthStore.setState({ loading: false });
+        setStuckInLoading(true);
+
+        // If user is authenticated but we're stuck, try to navigate
+        const { user: currentUser } = useAuthStore.getState();
+        if (currentUser) {
+          forceNavigateToTabs();
+        }
+      }
+    }, 8000); // 8 seconds timeout for loading state
+  }, [forceNavigateToTabs]);
+
   useEffect(() => {
+    // Set up loading timeout whenever loading becomes true
+    if (loading) {
+      setupLoadingTimeout();
+    }
+
     // Cleanup on unmount
     return () => {
       clearTimeouts();
     };
-  }, [clearTimeouts]);
+  }, [loading, clearTimeouts, setupLoadingTimeout]);
 
   useEffect(() => {
     // Only redirect when auth is initialized, we have a user, and haven't redirected yet
@@ -108,6 +144,7 @@ export default function Index() {
       setHasRedirected(false);
       setRedirectAttempts(0);
       setNavigationFailed(false);
+      setStuckInLoading(false);
     }
   }, [
     initialized,
@@ -155,6 +192,12 @@ export default function Index() {
         </Text>
       </View>
     );
+  }
+
+  // If loading is stuck and we detected it, try to force navigate
+  if (stuckInLoading && user) {
+    forceNavigateToTabs();
+    return <LoadingScreen message="Attempting to recover..." />;
   }
 
   // Show loading screen while redirecting (only briefly)

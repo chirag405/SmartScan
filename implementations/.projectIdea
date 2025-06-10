@@ -4,71 +4,76 @@ A mobile-first document management app that combines OCR technology with AI assi
 🏗️ Tech Stack
 
 Frontend: React Native with Expo
-Backend: Supabase (PostgreSQL + Auth + Storage)
-AI/OCR: Google Vision API + Vercel AI SDK
-Search: Supabase vector extension
+Backend: Supabase (PostgreSQL + Auth + Storage + pgvector)
+AI/OCR: Eden AI Document Parser & Image OCR + OpenAI GPT-4 + Embeddings
+Vector Search: Supabase pgvector extension
+UI Framework: Vercel AI SDK for chat interface
 Authentication: Google OAuth
 
 ✨ Core Features
 📱 Document Management
 
 Multi-source Upload: Camera, gallery, and file system integration
-Auto-OCR Processing: Extract text from images and PDFs using Google Vision API
-Smart Categorization: Auto-detect document types (ID cards, bills, receipts, etc.)
+Document Processing: Extract text from images and PDFs using Eden AI
+Intelligent Classification: Auto-detect document types with OpenAI (PAN card, Aadhar, etc.)
+Structured Data Extraction: Convert document text to structured JSON format
+Vector Embeddings: Generate embeddings for semantic search
 Cloud Storage: Secure document storage with Supabase
-Real-time Status: Visual indicators for upload/processing progress
 
-🤖 AI Chat Assistant
+🤖 AI Document Query System
 
-Natural Language Queries: Ask questions about your documents in plain English
-Document Search: Vector-based semantic search through document content
-Smart Retrieval: AI automatically finds relevant documents for your queries
-Contextual Responses: Get detailed answers with document references
-Document Preview: View document snippets directly in chat
+Vector-based Semantic Search: Find relevant document sections based on meaning
+Direct Document Queries: Ask specific questions about your documents
+Document Download: Request original documents through natural language
+Smart Retrieval: AI automatically finds relevant document chunks
+Context-aware Responses: Get answers that reference specific document sections
+Streaming Responses: Real-time AI responses via Vercel AI SDK
 
 👤 User Experience
 
 Google Authentication: Seamless sign-in with Google OAuth
-Usage Analytics: Track documents uploaded, storage used, and AI queries
+Usage Analytics: Track documents uploaded, storage used, AI queries
 Clean Interface: Material Design 3 inspired UI with intuitive navigation
 Cross-platform: Works on both iOS and Android
 
 🎮 User Flows
-Upload & Process
+Document Processing
 
 Select document source (camera/gallery/files)
 Upload to secure cloud storage
-Auto-trigger OCR text extraction
-Generate vector embeddings for search
-Categorize and organize automatically
+Process with Eden AI Document Parser & Image OCR
+Use OpenAI to classify and extract structured data
+Generate embeddings with OpenAI Embeddings API
+Store in Supabase with pgvector
 
-Chat & Search
+Document Querying
 
-Ask questions about documents in natural language
-AI determines relevant documents using vector search
-Retrieve and analyze document content
-Provide contextual answers with source references
-Display document previews and details
+Ask specific questions about documents via chat interface
+Generate embeddings for query
+Perform vector similarity search in pgvector
+Retrieve most relevant document chunks
+Generate focused response with OpenAI GPT-4
+Stream response via Vercel AI SDK
 
 🚀 MVP Implementation Priority
 Phase 1 - Core Functionality
 
 ✅ Google Authentication
 ✅ Document upload (camera/gallery/files)
-✅ Google Vision OCR integration
-✅ Basic document list and management
+✅ Eden AI integration for document parsing & OCR
+✅ OpenAI integration for document classification
 
-Phase 2 - AI Integration
+Phase 2 - Vector Search & AI Query
 
-✅ AI chat interface with document tools
-✅ Vector search implementation
-✅ Document retrieval and preview
-✅ User profile and usage statistics
+✅ OpenAI Embeddings integration
+✅ pgvector setup and configuration
+✅ Vector similarity search implementation
+✅ Vercel AI SDK integration for chat interface
 
 Phase 3 - Enhanced Features
 
 📋 Advanced document categorization
-🔍 Enhanced search filters
+🔍 Multi-document query capabilities
 📊 Detailed analytics dashboard
 🔔 Push notifications for processing status
 

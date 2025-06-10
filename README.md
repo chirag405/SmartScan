@@ -1,247 +1,131 @@
 # SmartScan
 
-An intelligent document processing app built with React Native, Expo, and Supabase. SmartScan allows users to upload documents in various formats, extract text using Google Vision API, create vector embeddings for semantic search, and interact with their documents through AI-powered chat.
+SmartScan is a document scanning and AI-powered search application that allows users to upload documents, extract text using OCR, and perform semantic searches using vector embeddings.
 
 ## Features
 
-### Document Processing
+- **Document Upload**: Upload PDF, images, and text files from your device or camera
+- **OCR Processing**: Extract text from documents using Eden AI Document Parser and Image OCR
+- **Vector Embeddings**: Create semantic embeddings using OpenAI's embedding model
+- **Semantic Search**: Search documents by meaning, not just keywords
+- **Multi-platform**: Works on iOS, Android, and Web with a single codebase
 
-- **Multi-format Support**: Upload images (JPEG, PNG, GIF, BMP), PDFs, Word documents, and text files
-- **OCR Text Extraction**: Powered by Google Vision API for accurate text recognition
-- **Intelligent Processing**: Automatic text extraction with confidence scoring
-- **Background Processing**: Asynchronous document processing for better user experience
-
-### AI-Powered Search
-
-- **Vector Embeddings**: Documents are automatically converted to embeddings using OpenAI's text-embedding-3-small model
-- **Semantic Search**: Find documents by meaning, not just keywords
-- **Similarity Scoring**: Results ranked by relevance with confidence indicators
-- **Real-time Search**: Fast vector similarity search using pgvector
-
-### Document Management
-
-- **Upload Options**:
-  - Choose from device storage
-  - Select from photo library
-  - Take photos with camera
-- **Processing Status**: Track document processing progress
-- **Retry Failed**: Reprocess documents that failed initially
-- **Statistics Dashboard**: View total documents, processed count, and storage usage
-
-### Chat Integration
-
-- **Document-aware Conversations**: Chat with AI about your uploaded documents
-- **Context Retrieval**: AI can reference specific document content
-- **Multi-document Queries**: Ask questions across your entire document library
-
-## Tech Stack
-
-- **Frontend**: React Native with Expo
-- **Backend**: Supabase (PostgreSQL with pgvector)
-- **AI Services**:
-  - Google Vision API for OCR
-  - OpenAI for embeddings and chat
-- **Storage**: Supabase Storage for file management
-- **Vector Database**: PostgreSQL with pgvector extension
-
-## Getting Started
+## Setup
 
 ### Prerequisites
 
-1. **Node.js** (v18 or later)
-2. **Expo CLI** (`npm install -g @expo/cli`)
-3. **Google Cloud Platform** account with Vision API enabled
-4. **OpenAI** account with API access
-5. **Supabase** project
+- Node.js 16+ and npm
+- Expo CLI (`npm install -g expo-cli`)
+- Supabase account
+- Eden AI API key
+- OpenAI API key
 
 ### Installation
 
-1. **Clone the repository:**
+1. Clone the repository:
 
-   ```bash
-   git clone <repository-url>
-   cd SmartScan
-   ```
-
-2. **Install dependencies:**
-
-   ```bash
-   npm install
-   ```
-
-3. **Set up environment variables:**
-   Create a `.env.local` file in the project root:
-
-   ```env
-   # Google Vision API
-   EXPO_PUBLIC_GOOGLE_VISION_API_KEY=your-google-vision-api-key
-
-   # OpenAI API
-   EXPO_PUBLIC_OPENAI_API_KEY=your-openai-api-key
-
-   # Supabase
-   EXPO_PUBLIC_SUPABASE_URL=your-supabase-url
-   EXPO_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-   ```
-
-4. **Database Setup:**
-
-   Enable pgvector extension in your Supabase project:
-
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS vector;
-   ```
-
-   Run the vector search function from `supabase/functions/search-document-embeddings.sql`
-
-5. **Start the development server:**
-   ```bash
-   npm start
-   ```
-
-### Detailed Setup Guide
-
-For complete setup instructions including API configuration, see [ENVIRONMENT_SETUP.md](./ENVIRONMENT_SETUP.md).
-
-## Usage
-
-### Uploading Documents
-
-1. Navigate to the **Documents** tab
-2. Switch to the **Upload** section
-3. Choose your upload method:
-   - **Choose Document**: Select files from device storage
-   - **Choose Image**: Pick from photo library
-   - **Take Photo**: Capture documents with camera
-4. Wait for processing to complete
-
-### Searching Documents
-
-1. Go to the **Search** section in the Documents tab
-2. Enter your search query (supports semantic search)
-3. View results with similarity scores
-4. Tap on documents to view details
-
-### Managing Documents
-
-1. Use the **Manage** section to view all uploaded documents
-2. See processing status and confidence scores
-3. Retry failed processing if needed
-4. View storage statistics
-
-### AI Chat
-
-1. Navigate to the **Chat** tab
-2. Ask questions about your documents
-3. The AI will retrieve relevant content automatically
-4. Reference specific documents in conversations
-
-## API Integration
-
-### Google Vision API
-
-The app uses Google Vision API for OCR text extraction:
-
-- Supports multiple image formats
-- Provides confidence scoring
-- Extracts text entities and bounding boxes
-- Handles various document orientations
-
-### OpenAI Integration
-
-- **Embeddings**: Uses `text-embedding-3-small` for vector generation
-- **Chat**: Integrates with GPT models for document conversations
-- **Token Optimization**: Intelligent text chunking to minimize costs
-
-### Vector Search
-
-- **pgvector**: PostgreSQL extension for vector similarity
-- **Cosine Similarity**: Measures document relevance
-- **Indexed Search**: Optimized queries for fast results
-- **User Isolation**: Search within user's document scope
-
-## Architecture
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   React Native  │    │    Supabase      │    │   AI Services   │
-│     Frontend    │◄──►│   PostgreSQL     │    │                 │
-│                 │    │   + pgvector     │    │ Google Vision   │
-│ • Document UI   │    │   + Storage      │    │ OpenAI          │
-│ • Search UI     │    │   + Auth         │    │                 │
-│ • Chat UI       │    │                  │    │                 │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
+```bash
+git clone https://github.com/yourusername/smartscan.git
+cd smartscan
 ```
 
-## Database Schema
+2. Install dependencies:
 
-Key tables:
+```bash
+npm install
+```
 
-- `documents`: Document metadata and OCR results
-- `document_embeddings`: Vector embeddings for search
-- `ai_conversations`: Chat history
-- `ai_messages`: Individual chat messages
+3. Set up environment variables by creating a `.env` file:
 
-## Cost Considerations
+```
+EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+EXPO_PUBLIC_EDEN_AI_API_KEY=your_eden_ai_api_key
+EXPO_PUBLIC_OPENAI_API_KEY=your_openai_api_key
+EXPO_PUBLIC_APP_URL=your_app_url
+```
 
-### Google Vision API
+4. Initialize the database:
 
-- First 1,000 requests/month: Free
-- Additional requests: $1.50 per 1,000
+```bash
+npm run db:init
+```
 
-### OpenAI
+5. Set up authentication:
 
-- Embeddings: $0.00002 per 1K tokens
-- Chat: Varies by model used
+```bash
+npm run auth:setup
+```
 
-### Optimization Tips
+6. Start the development server:
 
-- Compress images before processing
-- Implement smart chunking for large documents
-- Cache embeddings to avoid reprocessing
-- Monitor API usage with alerts
+```bash
+npm start
+```
 
-## Contributing
+## Database Setup
 
-1. Fork the repository
-2. Create a feature branch
-3. Follow the existing code style
-4. Add tests for new features
-5. Submit a pull request
+The application requires a Supabase project with the following:
 
-## Security
+1. **Database Tables**:
 
-- Environment variables are never committed
-- API keys are properly secured
-- User data is isolated with RLS policies
-- File uploads are validated and sanitized
+   - `users`: For user profiles
+   - `documents`: For document metadata
+   - `document_embeddings`: For vector embeddings
+
+2. **Vector Extension**:
+
+   - Make sure the `vector` extension is enabled in your Supabase project
+
+3. **Storage Bucket**:
+
+   - Create a `documents` bucket for file storage
+
+4. **Authentication**:
+   - Enable Google OAuth provider
+
+The `db:init` script will help you set up most of this automatically.
+
+## Document Processing Flow
+
+1. **Upload**: User uploads a document via the DocumentUploader component
+2. **Storage**: File is stored in Supabase Storage
+3. **OCR**: Eden AI extracts text from the document using Document Parser (for PDFs) or Image OCR (for images)
+4. **Embedding**: OpenAI creates vector embeddings for the extracted text
+5. **Storage**: Embeddings are stored in the database with PostgreSQL's vector extension
+6. **Search**: Users can search using natural language queries
+
+## Component Structure
+
+- `DocumentUploader.tsx`: UI for uploading documents
+- `DocumentSearch.tsx`: UI for searching documents
+- `DocumentList.tsx`: UI for viewing and managing documents
+
+## Server Functions
+
+- `documentQueries.uploadAndProcessDocument`: Handles document upload and processing
+- `processDocumentWithOCR`: Extracts text from documents
+- `createDocumentEmbeddings`: Creates vector embeddings for extracted text
+- `searchDocumentsByEmbedding`: Performs semantic search
 
 ## Troubleshooting
 
-### Common Issues
+### PDF Processing
 
-1. **Vision API Errors**: Check API key and quota
-2. **Embedding Failures**: Verify OpenAI API access
-3. **Search Not Working**: Ensure pgvector extension is installed
-4. **Upload Failures**: Check file size and format restrictions
+If you encounter issues with PDF processing:
 
-### Debug Mode
+1. Make sure your Eden AI API key is correctly set up with access to Document Parser and Image OCR services
+2. Verify that the PDF is not password-protected
+3. Try converting the PDF to images before uploading for better OCR results
 
-Enable debug logging by setting:
+### Vector Search
 
-```env
-DEBUG_GOOGLE_VISION=true
-DEBUG_OPENAI_EMBEDDINGS=true
-```
+If vector search is not working:
+
+1. Confirm the `vector` extension is enabled in Supabase
+2. Check that the `search_document_embeddings` function is properly created
+3. Verify embeddings are being stored correctly in the `document_embeddings` table
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For support and questions:
-
-- Check the troubleshooting guide in [ENVIRONMENT_SETUP.md](./ENVIRONMENT_SETUP.md)
-- Review the API documentation
-- Open an issue on GitHub
+MIT

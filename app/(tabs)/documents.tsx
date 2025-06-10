@@ -71,12 +71,18 @@ export default function DocumentsScreen() {
     switch (status) {
       case "completed":
         return "#34C759";
+      case "fallback":
+        return "#5856D6"; // Purple for fallback
+      case "partial":
+        return "#FF9500"; // Orange for partial
       case "processing":
         return "#FF9500";
+      case "pending":
+        return "#8E8E93";
       case "failed":
         return "#FF3B30";
       default:
-        return "#6c757d";
+        return "#8E8E93";
     }
   };
 
@@ -84,12 +90,18 @@ export default function DocumentsScreen() {
     switch (status) {
       case "completed":
         return "Processed";
+      case "fallback":
+        return "Limited";
+      case "partial":
+        return "Partial";
       case "processing":
         return "Processing";
+      case "pending":
+        return "Pending";
       case "failed":
         return "Failed";
       default:
-        return "Pending";
+        return "Unknown";
     }
   };
 
@@ -177,9 +189,12 @@ export default function DocumentsScreen() {
         </View>
       </View>
 
-      {document.detected_text && (
+      {document.extracted_data && (
         <Text style={styles.documentPreview} numberOfLines={2}>
-          {document.detected_text.substring(0, 150)}...
+          {typeof document.extracted_data === "object"
+            ? JSON.stringify(document.extracted_data).substring(0, 150)
+            : ""}
+          ...
         </Text>
       )}
 
