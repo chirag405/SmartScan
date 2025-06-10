@@ -65,6 +65,19 @@ export const useAuthStore = create<AuthState>()(
       let isInitialized = false;
       let authListener: { data: { subscription: any } } | null = null;
 
+      // Add this safety mechanism to prevent stuck loading states
+      const addLoadingSafetyTimeout = () => {
+        const MAX_LOADING_TIME = 10000; // 10 seconds max
+
+        setTimeout(() => {
+          const state = get();
+          if (state.loading) {
+            console.log("🚑 Auto-fixing stuck loading state");
+            set({ loading: false });
+          }
+        }, MAX_LOADING_TIME);
+      };
+
       // Validate session by checking if user exists in database
       const validateSession = async (): Promise<boolean> => {
         try {
@@ -298,6 +311,13 @@ export const useAuthStore = create<AuthState>()(
                 timestamp: new Date().toISOString(),
               });
 
+              // Keep loading state true when signing in until navigation completes
+              if (event === "SIGNED_IN" && session?.user) {
+                // Keep loading true - will be managed by navigation logic
+                set({ loading: true });
+                addLoadingSafetyTimeout();
+              }
+
               // Clear existing timeout
               if (debounceTimeout) {
                 clearTimeout(debounceTimeout);
@@ -333,6 +353,15 @@ export const useAuthStore = create<AuthState>()(
                     session.user.id
                   );
 
+                  // Create a backup safety timeout to reset loading if anything goes wrong
+                  setTimeout(() => {
+                    const state = get();
+                    if (state.loading) {
+                      console.log("⚠️ Safety timeout: resetting loading state");
+                      set({ loading: false });
+                    }
+                  }, 10000);
+
                   // Clear OAuth timeout if it exists
                   const state = get() as any;
                   if (state.oauthTimeoutId) {
@@ -355,7 +384,8 @@ export const useAuthStore = create<AuthState>()(
                       userData.email
                     );
 
-                    // Load user profile with retry logic (profile might be created by trigger)
+                    // When a user signs in, don't set loading to false immediately
+                    // This will be handled by the navigation logic or the timeout
                     try {
                       // Wait a moment for the database trigger to create the profile
                       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -369,7 +399,6 @@ export const useAuthStore = create<AuthState>()(
                       set({
                         user: userData,
                         userProfile: profile,
-                        loading: false,
                         error: null,
                         initialized: true,
                       });
@@ -379,11 +408,10 @@ export const useAuthStore = create<AuthState>()(
                       console.log(
                         "Could not load profile, setting user without profile"
                       );
-                      // Set user without profile - profile creation will be handled by trigger
+
                       set({
                         user: userData,
                         userProfile: null,
-                        loading: false,
                         error: null,
                         initialized: true,
                       });
@@ -394,7 +422,6 @@ export const useAuthStore = create<AuthState>()(
                     }
                   } else {
                     console.log("Same user, clearing loading state");
-                    // Same user, just ensure loading is false
                     set({ loading: false });
                   }
                 } else if (event === "SIGNED_OUT") {
@@ -476,10 +503,11 @@ export const useAuthStore = create<AuthState>()(
 
           // For now, just show an error to encourage using the native component
           set({
-            loading: false,
+            loading: true,
             error:
               "Please use the native Google Sign-In button. If you see this message, the app needs to be updated to use the new authentication method.",
           });
+          addLoadingSafetyTimeout();
         },
 
         signOut: async () => {
@@ -491,6 +519,7 @@ export const useAuthStore = create<AuthState>()(
           }
 
           set({ loading: true, error: null, isSigningOut: true });
+          addLoadingSafetyTimeout();
 
           try {
             const { error } = await supabase.auth.signOut();

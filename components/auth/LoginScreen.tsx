@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import React, { useEffect } from "react";
 import {
   ActivityIndicator,
@@ -24,8 +25,34 @@ export const LoginScreen: React.FC = () => {
   useEffect(() => {
     if (user) {
       console.log("User authenticated:", user.email);
+
+      // Clear loading state and navigate to tabs
+      useAuthStore.setState({ loading: false });
+      router.replace("/(tabs)");
     }
   }, [user]);
+
+  // Fix for stuck loading state - force clear after 8 seconds
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    if (loading) {
+      timeoutId = setTimeout(() => {
+        console.log("⚠️ Loading timeout reached, forcing reset");
+        useAuthStore.setState({ loading: false });
+
+        // If user is authenticated, force navigation
+        const currentUser = useAuthStore.getState().user;
+        if (currentUser) {
+          router.replace("/(tabs)");
+        }
+      }, 8000);
+    }
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [loading]);
 
   const isLoading = loading || isSigningOut;
 
@@ -37,44 +64,46 @@ export const LoginScreen: React.FC = () => {
       ]}
     >
       <View style={styles.content}>
-        <Text
-          style={[
-            styles.title,
-            { color: colorScheme === "dark" ? "#FFFFFF" : "#000000" },
-          ]}
-        >
-          Welcome to SmartScan
-        </Text>
-        <Text
-          style={[
-            styles.subtitle,
-            { color: colorScheme === "dark" ? "#8E8E93" : "#8E8E93" },
-          ]}
-        >
-          Sign in to access your documents and start scanning
-        </Text>
-
-        <View style={styles.buttonContainer}>
-          <GoogleSignInWeb loading={isLoading} />
-        </View>
-
-        {isLoading && (
+        {isLoading ? (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="small" color="#007AFF" />
+            <ActivityIndicator size="large" color="#007AFF" />
             <Text
               style={[
                 styles.loadingText,
+                { color: colorScheme === "dark" ? "#FFFFFF" : "#000000" },
+              ]}
+            >
+              Signing in...
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.authContainer}>
+            <Text
+              style={[
+                styles.title,
+                { color: colorScheme === "dark" ? "#FFFFFF" : "#000000" },
+              ]}
+            >
+              Welcome to SmartScan
+            </Text>
+            <Text
+              style={[
+                styles.subtitle,
                 { color: colorScheme === "dark" ? "#8E8E93" : "#8E8E93" },
               ]}
             >
-              {isSigningOut ? "Signing out..." : "Signing you in..."}
+              Sign in to access your documents and start scanning
             </Text>
-          </View>
-        )}
 
-        {error && (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{error}</Text>
+            <View style={styles.buttonContainer}>
+              <GoogleSignInWeb />
+            </View>
+
+            {error && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -85,16 +114,18 @@ export const LoginScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: "center",
   },
   content: {
-    paddingHorizontal: 32,
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
   },
   title: {
-    fontSize: 32,
+    fontSize: 24,
     fontWeight: "bold",
+    marginBottom: 40,
     textAlign: "center",
-    marginBottom: 16,
   },
   subtitle: {
     fontSize: 16,
@@ -103,27 +134,32 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   buttonContainer: {
-    marginBottom: 24,
+    width: "100%",
+    maxWidth: 300,
   },
   loadingContainer: {
-    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 16,
+    marginTop: 20,
   },
   loadingText: {
-    marginLeft: 8,
-    fontSize: 14,
+    marginTop: 10,
+    fontSize: 16,
   },
   errorContainer: {
-    marginTop: 16,
-    padding: 12,
-    backgroundColor: "#ffebee",
+    marginTop: 20,
+    padding: 10,
+    backgroundColor: "rgba(255, 59, 48, 0.1)",
     borderRadius: 8,
   },
   errorText: {
-    color: "#c62828",
+    color: "#FF3B30",
     textAlign: "center",
     fontSize: 14,
+  },
+  authContainer: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
   },
 });

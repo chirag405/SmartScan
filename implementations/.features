@@ -5,24 +5,27 @@
 - **File Picker**: Support for camera, gallery, and file system
 - **Upload Progress**: Show upload status with a progress indicator
 - **Document Preview**: Thumbnail view after upload
-- **Auto-OCR**: Trigger Google Vision API after upload
+- **Document Processing**: Eden AI Document Parser & Image OCR for text extraction
+- **Intelligent Classification**: Auto-detect document types (PAN card, Aadhar, marksheets, etc.)
 - **Status Tracking**: Visual indicators for processing status
 
 ---
 
-## 💬 AI Chat (Chat Screen)
+## 💬 AI Document Query System
 
 ### Tools Integration
 
 - `getUserDocuments`: Fetch user's document list
 - `getDocumentById`: Fetch a specific document by ID
-- `searchDocuments`: Vector search through document content
+- `searchDocumentEmbeddings`: Vector search through document content
+- `getDocumentDownloadUrl`: Generate download URL for original document
 
-### Chat Features
+### Query Features
 
-- **Conversation Memory**: Maintain chat context
-- **Streaming Responses**: Real-time AI responses
-- **Document Cards**: Rich document preview in chat
+- **Direct Q&A**: Straightforward question-answer about document content
+- **Streaming Responses**: Real-time AI responses via Vercel AI SDK
+- **Document Cards**: Rich document preview with extracted data
+- **Document Downloads**: Direct access to original documents
 
 ---
 
@@ -37,23 +40,49 @@
 
 # 🎯 Core User Flows
 
-## 1. 📄 Document Upload Flow
+## 1. 📄 Document Processing Flow
 
 1. User opens app → Home tab → Upload button
 2. Choose source (Camera / Gallery / Files)
 3. Select document → Upload to Supabase Storage
-4. Trigger OCR processing
-5. Update document status
-6. Generate embeddings → Store in database
+4. Process with Eden AI:
+   - Document Parser for PDFs and structured documents
+   - Image OCR for photos and images
+5. Extract raw text from document
+6. Use OpenAI to:
+   - Classify document type (PAN card, Aadhar, marksheet, etc.)
+   - Extract structured data based on document type
+   - Generate searchable metadata (names, dates, numbers, etc.)
+7. Store in Supabase:
+   - Document type
+   - Structured data (JSON format)
+   - Metadata for search
+8. Generate text chunks from structured data
+9. Create vector embeddings using OpenAI Embeddings API
+10. Store embeddings in Supabase pgvector
 
-## 2. 💬 Chat Flow
+## 2. 💬 Document Query Flow
 
-1. User goes to Chat tab → Types question
-2. AI determines if it needs document access
-3. Uses appropriate tool (search/fetch)
-4. Retrieves relevant documents
-5. Generates response with document context
-6. Displays formatted response
+1. User enters a specific question about their documents
+2. System processes query using Vercel AI SDK
+3. Determine query type:
+
+   - Document download request
+   - Specific information request
+
+   **For Document Download:**
+
+   - Retrieve document URL from Supabase Storage
+   - Return download link to user
+
+   **For Information Request:**
+
+   - Convert query to vector embedding using OpenAI
+   - Perform vector similarity search in Supabase
+   - Retrieve top-k most relevant text chunks
+   - Send query + retrieved chunks to OpenAI
+   - Generate focused response using document context
+   - Stream response back to user via Vercel AI SDK
 
 ## 3. 🔐 Authentication Flow
 
@@ -69,6 +98,51 @@
 ```env
 EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-GOOGLE_VISION_API_KEY=your_google_vision_key
+EDEN_AI_API_KEY=your_eden_ai_key
 OPENAI_API_KEY=your_openai_key
 ```
+
+---
+
+# 💭 Document Processing Strategy
+
+## Vector Embedding Approach
+
+1. **Text Extraction** (Eden AI):
+
+   - Extract raw text from documents using Eden AI Document Parser/Image OCR
+   - Initial processing to normalize text formatting
+
+2. **Intelligent Classification** (OpenAI):
+
+   - Send extracted text to OpenAI model
+   - Prompt model to identify document type (PAN card, Aadhar, marksheet, etc.)
+   - Extract structured information in JSON format
+   - Example for PAN card:
+     ```json
+     {
+       "type": "PAN_CARD",
+       "pan_number": "ABCDE1234F",
+       "name": "John Doe",
+       "father_name": "Richard Doe",
+       "dob": "01/01/1990"
+     }
+     ```
+
+3. **Text Chunking**:
+
+   - Split structured data into meaningful chunks
+   - Create chunks based on document sections or key-value pairs
+   - Ensure chunks retain context and are semantically meaningful
+
+4. **Vector Embedding Generation**:
+
+   - Send each text chunk to OpenAI Embeddings API
+   - Generate vector representation for each chunk
+   - Prepare vectors for storage in pgvector
+
+5. **Storage in Supabase**:
+   - Store original document in Supabase Storage
+   - Store structured data in PostgreSQL table
+   - Store vector embeddings in pgvector column
+   - Maintain relationship between chunks and original documents

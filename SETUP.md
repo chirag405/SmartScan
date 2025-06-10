@@ -14,7 +14,34 @@ Create a `.env` file in the root directory with the following variables:
 EXPO_PUBLIC_SUPABASE_URL=your_supabase_project_url
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 EXPO_PUBLIC_APP_URL=your_app_url_for_oauth_redirect
+EXPO_PUBLIC_EDEN_AI_API_KEY=your_eden_ai_api_key
+EXPO_PUBLIC_OPENAI_API_KEY=your_openai_api_key
 ```
+
+## API Setup
+
+### Eden AI Configuration
+
+1. Sign up for an Eden AI account at [https://app.edenai.run](https://app.edenai.run)
+2. Create a new project or use an existing one
+3. Get your API key from the dashboard
+4. Add it to your environment variables as `EXPO_PUBLIC_EDEN_AI_API_KEY`
+
+The app uses:
+
+- **Document Parser API** for PDF text extraction
+- **Image OCR API** for image text extraction
+
+### OpenAI Configuration
+
+1. Sign up for an OpenAI account at [https://platform.openai.com](https://platform.openai.com)
+2. Create an API key from the API section
+3. Add it to your environment variables as `EXPO_PUBLIC_OPENAI_API_KEY`
+
+The app uses:
+
+- **text-embedding-3-small** for generating document embeddings
+- **GPT models** for AI chat functionality
 
 ## Supabase Configuration
 

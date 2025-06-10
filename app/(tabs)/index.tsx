@@ -66,6 +66,10 @@ const DocumentItem: React.FC<DocumentItemProps> = ({ document, onPress }) => {
     switch (document.ocr_status) {
       case "completed":
         return "#34C759";
+      case "fallback":
+        return "#5856D6"; // Purple for fallback
+      case "partial":
+        return "#FF9500"; // Orange for partial
       case "processing":
         return "#FF9500";
       case "pending":
@@ -81,6 +85,10 @@ const DocumentItem: React.FC<DocumentItemProps> = ({ document, onPress }) => {
     switch (document.ocr_status) {
       case "completed":
         return "checkmark-circle";
+      case "fallback":
+        return "document-text";
+      case "partial":
+        return "alert-circle";
       case "processing":
         return "time";
       case "pending":
@@ -96,6 +104,10 @@ const DocumentItem: React.FC<DocumentItemProps> = ({ document, onPress }) => {
     switch (document.ocr_status) {
       case "completed":
         return "Processed";
+      case "fallback":
+        return "Limited";
+      case "partial":
+        return "Partial";
       case "processing":
         return "Processing";
       case "pending":

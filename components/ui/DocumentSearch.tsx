@@ -72,12 +72,24 @@ const SearchResult: React.FC<SearchResultProps> = ({
               styles.statusDot,
               {
                 backgroundColor:
-                  document.ocr_status === "completed" ? "#34C759" : "#6c757d",
+                  document.ocr_status === "completed"
+                    ? "#34C759"
+                    : document.ocr_status === "fallback"
+                      ? "#5856D6"
+                      : document.ocr_status === "partial"
+                        ? "#FF9500"
+                        : "#6c757d",
               },
             ]}
           />
           <Text style={styles.statusText}>
-            {document.ocr_status === "completed" ? "Processed" : "Processing"}
+            {document.ocr_status === "completed"
+              ? "Processed"
+              : document.ocr_status === "fallback"
+                ? "Limited"
+                : document.ocr_status === "partial"
+                  ? "Partial"
+                  : "Processing"}
           </Text>
         </View>
         <Ionicons name="chevron-forward" size={16} color="#6c757d" />
