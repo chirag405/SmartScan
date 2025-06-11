@@ -37,26 +37,47 @@ const openai = new OpenAI({
 });
 
 // Helper function to chunk text
-const chunkText = (text: string, maxTokens: number = 1000): string[] => {
+const chunkText = (
+  text: string,
+  maxTokens: number = 1000,
+  overlap: number = 200
+): string[] => {
   const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0);
   const chunks: string[] = [];
   let currentChunk = "";
 
+  // Enhanced algorithm that ensures proper sentence boundaries and overlap
   for (const sentence of sentences) {
-    const potentialChunk = currentChunk + sentence + ".";
+    const trimmedSentence = sentence.trim() + "."; // Add back the sentence ending
+    const potentialChunk =
+      currentChunk + (currentChunk ? " " : "") + trimmedSentence;
+
     // Rough estimate: 1 token ≈ 4 characters
-    if (potentialChunk.length / 4 > maxTokens && currentChunk.length > 0) {
+    const potentialChunkTokens = Math.ceil(potentialChunk.length / 4);
+
+    if (potentialChunkTokens > maxTokens && currentChunk.length > 0) {
+      // Current chunk is full, add it to chunks
       chunks.push(currentChunk.trim());
-      currentChunk = sentence + ".";
+
+      // Create overlap by keeping some of the last content
+      const words = currentChunk.split(" ");
+      const overlapWordCount = Math.min(Math.ceil(overlap / 4), words.length);
+      const overlapText = words.slice(-overlapWordCount).join(" ");
+
+      // Start new chunk with overlap text + current sentence
+      currentChunk =
+        (overlapText.length > 0 ? overlapText + " " : "") + trimmedSentence;
     } else {
       currentChunk = potentialChunk;
     }
   }
 
+  // Add the last chunk if not empty
   if (currentChunk.trim().length > 0) {
     chunks.push(currentChunk.trim());
   }
 
+  console.log(`Created ${chunks.length} chunks with ${overlap} token overlap`);
   return chunks;
 };
 
@@ -389,15 +410,15 @@ const extractTextFromDocument = async (
                   const providerResult = resultData.results[provider];
 
                   const isSuccess =
-                    !providerResult.error && providerResult.extracted_data;
+                    !providerResult.error && providerResult.data;
                   if (isSuccess) {
                     console.log(`Using OCR results from provider: ${provider}`);
 
                     // Extract text from OCR results
-                    if (providerResult.extracted_data.text) {
-                      extractedText = providerResult.extracted_data.text;
-                    } else if (providerResult.extracted_data.texts) {
-                      extractedText = providerResult.extracted_data.texts
+                    if (providerResult.data.text) {
+                      extractedText = providerResult.data.text;
+                    } else if (providerResult.data.texts) {
+                      extractedText = providerResult.data.texts
                         .map(
                           (textObj: any) =>
                             textObj.text || textObj.content || textObj
@@ -406,8 +427,8 @@ const extractTextFromDocument = async (
                     }
 
                     // Extract entities if available
-                    if (providerResult.extracted_data.entities) {
-                      entities = providerResult.extracted_data.entities.map(
+                    if (providerResult.data.entities) {
+                      entities = providerResult.data.entities.map(
                         (entity: any) => ({
                           text: entity.value || entity.text,
                           description: entity.label || entity.type,
@@ -527,8 +548,9 @@ const extractTextFromDocument = async (
                     if (classificationResult.success) {
                       updateData.document_type =
                         classificationResult.documentType;
-                      updateData.extracted_data =
-                        classificationResult.structuredData;
+                      updateData.processed_text = JSON.stringify(
+                        classificationResult.structuredData
+                      );
 
                       // Only keep essential metadata
                       if (classificationResult.structuredData) {
@@ -641,7 +663,9 @@ const extractTextFromDocument = async (
                   await documentQueries.updateDocument(documentId, {
                     ocr_status: "error",
                     processed_at: new Date().toISOString(),
-                  });
+                    processed_text:
+                      "Error during document processing. Please try again.",
+                  } as any);
                 }
               }
 
@@ -778,6 +802,7 @@ export const processTextWithGPTStructured = async (
     includeOriginalText?: boolean;
     logFullResponse?: boolean;
     additionalMetadata?: Record<string, any>;
+    documentType?: string; // Add document type hint
   } = {}
 ): Promise<{
   success: boolean;
@@ -846,902 +871,33 @@ export const processTextWithGPTStructured = async (
       };
     }
 
+    // Get existing document type from database if not provided in options
+    let documentType = options.documentType;
+    if (!documentType) {
+      try {
+        const { data, error } = await supabase
+          .from("documents")
+          .select("document_type")
+          .eq("id", documentId)
+          .single();
+          
+        if (!error && data && data.document_type) {
+          documentType = data.document_type;
+          console.log(`Using existing document type from database: ${documentType}`);
+        }
+      } catch (err) {
+        // Ignore error, we'll proceed without document type
+        console.log("Could not retrieve document type from database");
+      }
+    }
+
+    // Include document type hint in the prompt if available
+    const documentTypeHint = documentType 
+      ? `\nIMPORTANT: This document appears to be a "${documentType}". Consider this document type in your analysis.` 
+      : '';
+
     // Prepare prompt for GPT
     const prompt = `
-    You are a document analysis expert with exceptional skills in information extraction. Your task is to:
-    1. Identify the type of document from the text provided
-    2. Extract ONLY the most relevant and unique information specific to this document
-    3. Present the information in a clear, structured paragraph format
-    4. COMPLETELY EXCLUDE generic disclaimers, boilerplate text, standard instructions, and legal warnings
-    
-    Document text:
-    ${rawText.slice(0, 15000)} // Limit to prevent token overflow
-    
-    STRICT EXCLUSION RULES - DO NOT INCLUDE:
-    - Generic disclaimers or warnings (e.g., "Aadhaar is proof of identity, not citizenship")
-    - Standard legal text or terms and conditions
-    - Boilerplate instructions (e.g., "verify through online authentication")
-    - Repeated headers/footers or watermarks
-    - Generic advice or precautionary statements
-    - Standard government notices or regulatory text
-    - Generic "how to use" instructions
-    - Standard contact information for government departments
-    - Generic security warnings or authentication instructions
-    
-    ONLY INCLUDE DOCUMENT-SPECIFIC INFORMATION:
-    - Personal details unique to the document holder
-    - Specific dates, numbers, and identifiers
-    - Unique addresses, contact information
-    - Specific course/subject details (for educational documents)
-    - Specific transaction details (for financial documents)
-    - Document-specific reference numbers or codes
-    
-    Please analyze the document and provide a structured paragraph response in the following format:
-    
-    **Document Type:** [Identified document type with confidence level]
-    
-    **Key Information:**
-    [Write 2-3 paragraphs covering the most important document-specific details. Include personal identifiers, dates, numbers, addresses, and other unique information. Organize logically - start with primary identification details, then supporting information, then any structured data like subjects/courses/transactions if applicable.]
-    
-    **Additional Details:**
-    [Include any other relevant document-specific information that provides context but isn't critical for identification. This could include secondary contact details, additional reference numbers, or other supporting data.]
-    
-    FORMATTING GUIDELINES:
-    - Use clear, readable paragraphs
-    - Bold important identifiers and numbers within the text
-    - Keep the response concise but comprehensive
-    - Focus on facts and data, not explanations
-    - Maintain the original language for names and addresses when bilingual
-    
-    IMPORTANT:
-    - Only extract information that is unique and specific to this particular document
-    - Completely ignore all generic text, disclaimers, and standard instructions
-    - Focus on the document holder's personal information and document-specific details
-    - Do not include any boilerplate or regulatory text
-    - Keep the response factual and direct
-    `;
-
-    // Call GPT
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.3, // Lower temperature for more consistent results
-      max_tokens: 4000,
-    });
-
-    const processedText = response.choices[0]?.message?.content?.trim();
-
-    if (!processedText) {
-      console.warn("GPT processing returned empty result");
-
-      metadata.status = "failure";
-      metadata.reason = "Empty response from GPT";
-      metadata.processingTime = Date.now() - startTime;
-
-      if (options.logFullResponse) {
-        metadata.fullResponse = response;
-      }
-
-      logStructuredDataProcessing({
-        documentId,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        processedText: null,
-        status: "failure",
-        metadata: { reason: "Empty response from GPT" },
-      });
-
-      return {
-        success: false,
-        processedText: null,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        metadata,
-      };
-    }
-
-    console.log(`Processed text length: ${processedText.length} characters`);
-    console.log("GPT processing completed successfully");
-
-    metadata.status = "success";
-    metadata.processingTime = Date.now() - startTime;
-    metadata.characterCount = processedText.length;
-
-    if (options.logFullResponse) {
-      metadata.fullResponse = response;
-    }
-
-    // Add sample of text for verification
-    metadata.textSample = {
-      firstChars: processedText.substring(0, 100),
-      lastChars: processedText.substring(processedText.length - 100),
-    };
-
-    // Log the structured data
-    logStructuredDataProcessing({
-      documentId,
-      originalText: options.includeOriginalText ? rawText : undefined,
-      processedText,
-      status: "success",
-      metadata: {
-        responseData: {
-          firstChars: processedText.substring(0, 100),
-          lastChars: processedText.substring(processedText.length - 100),
-        },
-      },
-    });
-
-    return {
-      success: true,
-      processedText,
-      originalText: options.includeOriginalText ? rawText : undefined,
-      metadata,
-    };
-  } catch (error) {
-    console.error("Error processing text with GPT:", error);
-
-    metadata.status = "failure";
-    metadata.reason = "GPT API error";
-    metadata.error = error instanceof Error ? error.message : String(error);
-    metadata.processingTime = Date.now() - startTime;
-
-    logStructuredDataProcessing({
-      documentId,
-      originalText: options.includeOriginalText ? rawText : undefined,
-      processedText: null,
-      error,
-      status: "failure",
-      metadata: { reason: "GPT API error" },
-    });
-
-    return {
-      success: false,
-      processedText: null,
-      originalText: options.includeOriginalText ? rawText : undefined,
-      metadata,
-    };
-  }
-};
-
-// Classify document type and extract structured data
-export const classifyDocumentAndExtractData = async (
-  processedText: string,
-  documentId: string
-): Promise<{
-  success: boolean;
-  documentType: string | null;
-  structuredData: Record<string, any> | null;
-  metadata: {
-    processingTime: number;
-    status: "success" | "failure" | "skipped";
-    model: string;
-    error?: string;
-  };
-}> => {
-  const startTime = Date.now();
-
-  try {
-    if (!processedText || processedText.trim().length === 0) {
-      console.warn("No text provided for document classification");
-      return {
-        success: false,
-        documentType: null,
-        structuredData: null,
-        metadata: {
-          processingTime: Date.now() - startTime,
-          status: "skipped",
-          model: "gpt-3.5-turbo-16k",
-          error: "Empty input text",
-        },
-      };
-    }
-
-    console.log(`Classifying document type for: ${documentId}`);
-
-    // Prepare prompt for GPT to classify document and extract structured data
-    const prompt = `
-    You are a document analysis expert with exceptional skills in information extraction. Your task is to:
-    1. Identify the type of document from the text provided
-    2. Extract ONLY the most relevant and unique information specific to this document
-    3. Present the information in a clear, structured paragraph format
-    4. COMPLETELY EXCLUDE generic disclaimers, boilerplate text, standard instructions, and legal warnings
-    
-    Document text:
-    ${processedText.slice(0, 15000)} // Limit to prevent token overflow
-    
-    STRICT EXCLUSION RULES - DO NOT INCLUDE:
-    - Generic disclaimers or warnings (e.g., "Aadhaar is proof of identity, not citizenship")
-    - Standard legal text or terms and conditions
-    - Boilerplate instructions (e.g., "verify through online authentication")
-    - Repeated headers/footers or watermarks
-    - Generic advice or precautionary statements
-    - Standard government notices or regulatory text
-    - Generic "how to use" instructions
-    - Standard contact information for government departments
-    - Generic security warnings or authentication instructions
-    
-    ONLY INCLUDE DOCUMENT-SPECIFIC INFORMATION:
-    - Personal details unique to the document holder
-    - Specific dates, numbers, and identifiers
-    - Unique addresses, contact information
-    - Specific course/subject details (for educational documents)
-    - Specific transaction details (for financial documents)
-    - Document-specific reference numbers or codes
-    
-    Please analyze the document and provide a structured paragraph response in the following format:
-    
-    **Document Type:** [Identified document type with confidence level]
-    
-    **Key Information:**
-    [Write 2-3 paragraphs covering the most important document-specific details. Include personal identifiers, dates, numbers, addresses, and other unique information. Organize logically - start with primary identification details, then supporting information, then any structured data like subjects/courses/transactions if applicable.]
-    
-    **Additional Details:**
-    [Include any other relevant document-specific information that provides context but isn't critical for identification. This could include secondary contact details, additional reference numbers, or other supporting data.]
-    
-    FORMATTING GUIDELINES:
-    - Use clear, readable paragraphs
-    - Bold important identifiers and numbers within the text
-    - Keep the response concise but comprehensive
-    - Focus on facts and data, not explanations
-    - Maintain the original language for names and addresses when bilingual
-    
-    IMPORTANT:
-    - Only extract information that is unique and specific to this particular document
-    - Completely ignore all generic text, disclaimers, and standard instructions
-    - Focus on the document holder's personal information and document-specific details
-    - Do not include any boilerplate or regulatory text
-    - Keep the response factual and direct
-    `;
-
-    // Call GPT for classification and data extraction
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo-16k",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2, // Lower temperature for more consistent results
-      max_tokens: 4000,
-    });
-
-    const result = response.choices[0]?.message?.content?.trim();
-
-    if (!result) {
-      console.warn("GPT classification returned empty result");
-      return {
-        success: false,
-        documentType: null,
-        structuredData: null,
-        metadata: {
-          processingTime: Date.now() - startTime,
-          status: "failure",
-          model: "gpt-3.5-turbo-16k",
-          error: "Empty response from GPT",
-        },
-      };
-    }
-
-    // Parse the response to extract document type and key information
-    // Response format is:
-    // **Document Type:** [type]
-    // **Key Information:** [info]
-    // **Additional Details:** [details]
-
-    let documentType = "Unknown Document";
-    const structuredData: Record<string, any> = {
-      title: "",
-      primary_info: {},
-      secondary_info: {},
-      full_text: result,
-    };
-
-    // Extract document type from the response
-    const docTypeMatch = result.match(
-      /\*\*Document Type:\*\* (.*?)(?=\n\n|\n\*\*|$)/s
-    );
-    if (docTypeMatch && docTypeMatch[1]) {
-      documentType = docTypeMatch[1].trim();
-
-      // If document type includes confidence level, extract it
-      const confidenceMatch =
-        documentType.match(/(.*?) with ([\d.]+)% confidence/i) ||
-        documentType.match(/(.*?) \(([\d.]+)%\)/i) ||
-        documentType.match(/(.*?) \(confidence: ([\d.]+)\)/i);
-
-      if (confidenceMatch) {
-        documentType = confidenceMatch[1].trim();
-        structuredData.confidence = parseFloat(confidenceMatch[2]) / 100;
-      } else {
-        structuredData.confidence = 0.85; // Default confidence
-      }
-    }
-
-    // Extract key information
-    const keyInfoMatch = result.match(
-      /\*\*Key Information:\*\* (.*?)(?=\n\n\*\*Additional Details|\n\*\*Additional Details|$)/s
-    );
-    if (keyInfoMatch && keyInfoMatch[1]) {
-      structuredData.primary_info.text = keyInfoMatch[1].trim();
-    }
-
-    // Extract additional details
-    const additionalDetailsMatch = result.match(
-      /\*\*Additional Details:\*\* (.*?)(?=\n\n\*\*|$)/s
-    );
-    if (additionalDetailsMatch && additionalDetailsMatch[1]) {
-      structuredData.secondary_info.text = additionalDetailsMatch[1].trim();
-    }
-
-    // Set title based on document type
-    structuredData.title = documentType;
-
-    console.log(`Document classified as: ${documentType}`);
-
-    return {
-      success: true,
-      documentType,
-      structuredData,
-      metadata: {
-        processingTime: Date.now() - startTime,
-        status: "success",
-        model: "gpt-3.5-turbo-16k",
-      },
-    };
-  } catch (error) {
-    console.error("Error classifying document:", error);
-    return {
-      success: false,
-      documentType: null,
-      structuredData: null,
-      metadata: {
-        processingTime: Date.now() - startTime,
-        status: "failure",
-        model: "gpt-3.5-turbo-16k",
-        error: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
-};
-
-// Update the document embedding creation to use structured data
-const createDocumentEmbeddings = async (
-  documentId: string,
-  text: string,
-  structuredData?: Record<string, any> | null
-): Promise<void> => {
-  try {
-    if (structuredData && Object.keys(structuredData).length > 0) {
-      console.log("Using structured data for embeddings generation");
-      await createEmbeddingsFromStructuredData(documentId, structuredData);
-    } else if (text && text.trim().length > 0) {
-      console.log("Falling back to raw text for embeddings generation");
-      await createEmbeddingsFromText(documentId, text);
-    } else {
-      console.warn(
-        "No text or structured data provided for embedding creation"
-      );
-      return;
-    }
-  } catch (error) {
-    console.error("Error creating document embeddings:", error);
-    throw error;
-  }
-};
-
-// Create embeddings from structured data
-const createEmbeddingsFromStructuredData = async (
-  documentId: string,
-  structuredData: Record<string, any>
-): Promise<void> => {
-  try {
-    console.log("Creating embeddings from structured data for:", documentId);
-
-    // Delete any existing embeddings for this document to avoid duplicates
-    const { error: deleteError } = await supabase
-      .from("document_embeddings")
-      .delete()
-      .eq("document_id", documentId);
-
-    if (deleteError) {
-      console.warn("Error deleting existing embeddings:", deleteError);
-    }
-
-    const chunks: { text: string; metadata: any }[] = [];
-
-    // Extract chunks from structured data using recursive function
-    extractChunksFromStructuredData(structuredData, chunks);
-
-    console.log(`Created ${chunks.length} chunks from structured data`);
-
-    if (chunks.length === 0) {
-      console.warn(
-        "No chunks extracted from structured data, falling back to JSON string"
-      );
-      // If no chunks were extracted, use the JSON string as fallback
-      const jsonText = JSON.stringify(structuredData, null, 2);
-      const fallbackChunks = chunkText(jsonText, 1000);
-      chunks.push(
-        ...fallbackChunks.map((chunk) => ({
-          text: chunk,
-          metadata: { source: "json_fallback" },
-        }))
-      );
-    }
-
-    // Process embeddings in batches
-    const batchSize = 5;
-    const embeddingResults = [];
-
-    for (let i = 0; i < chunks.length; i += batchSize) {
-      const batchChunks = chunks.slice(i, i + batchSize);
-
-      const batchPromises = batchChunks.map(async (chunk, batchIndex) => {
-        try {
-          const embedding = await createEmbedding(chunk.text);
-
-          // Convert embedding array to PostgreSQL vector format
-          const vectorString = `[${embedding.join(",")}]`;
-
-          return {
-            document_id: documentId,
-            content_chunk: chunk.text,
-            chunk_index: i + batchIndex,
-            chunk_type: "structured",
-            chunk_metadata: {
-              ...chunk.metadata,
-              token_count: Math.ceil(chunk.text.length / 4),
-              chunk_length: chunk.text.length,
-            },
-            embedding: vectorString,
-            tokens_count: Math.ceil(chunk.text.length / 4),
-          };
-        } catch (error) {
-          console.error(
-            `Error creating embedding for chunk ${i + batchIndex}:`,
-            error
-          );
-          throw error;
-        }
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      embeddingResults.push(...batchResults);
-
-      // Add a small delay between batches to respect rate limits
-      if (i + batchSize < chunks.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-
-    // Insert all embeddings into the database
-    if (embeddingResults.length > 0) {
-      const { error } = await supabase
-        .from("document_embeddings")
-        .insert(embeddingResults);
-
-      if (error) {
-        console.error("Error inserting embeddings:", error);
-        throw new Error(`Failed to insert embeddings: ${error.message}`);
-      }
-
-      console.log(
-        `Successfully created ${embeddingResults.length} embeddings from structured data for document:`,
-        documentId
-      );
-    } else {
-      console.warn("No embeddings created for document:", documentId);
-    }
-  } catch (error) {
-    console.error("Error creating embeddings from structured data:", error);
-    throw error;
-  }
-};
-
-// Helper function to recursively extract chunks from structured data
-const extractChunksFromStructuredData = (
-  data: any,
-  chunks: { text: string; metadata: any }[],
-  path: string = "",
-  depth: number = 0
-): void => {
-  // Base case: if max depth reached or not an object
-  if (depth > 10 || typeof data !== "object" || data === null) {
-    return;
-  }
-
-  // Special handling for arrays of objects
-  if (Array.isArray(data)) {
-    data.forEach((item, index) => {
-      const newPath = path ? `${path}[${index}]` : `[${index}]`;
-      extractChunksFromStructuredData(item, chunks, newPath, depth + 1);
-    });
-    return;
-  }
-
-  // Check for title and add it with high importance
-  if (
-    data.title &&
-    typeof data.title === "string" &&
-    data.title.trim().length > 0
-  ) {
-    chunks.push({
-      text: `Title: ${data.title}`,
-      metadata: {
-        path: path ? `${path}.title` : "title",
-        field: "title",
-        importance: "high",
-      },
-    });
-  }
-
-  // Process primary_info with highest priority
-  if (data.primary_info && typeof data.primary_info === "object") {
-    const primaryInfoText = formatObjectToText(data.primary_info);
-    if (primaryInfoText.trim().length > 0) {
-      chunks.push({
-        text: `Primary Information: ${primaryInfoText}`,
-        metadata: {
-          path: path ? `${path}.primary_info` : "primary_info",
-          importance: "high",
-          type: "primary_info",
-        },
-      });
-    }
-
-    // Also extract primary_info fields individually for more precise matching
-    for (const [key, value] of Object.entries(data.primary_info)) {
-      if (typeof value === "string" && value.trim().length > 0) {
-        chunks.push({
-          text: `${key}: ${value}`,
-          metadata: {
-            path: path ? `${path}.primary_info.${key}` : `primary_info.${key}`,
-            field: key,
-            importance: "high",
-          },
-        });
-      }
-    }
-  }
-
-  // Process secondary_info with medium priority
-  if (data.secondary_info && typeof data.secondary_info === "object") {
-    const secondaryInfoText = formatObjectToText(data.secondary_info);
-    if (secondaryInfoText.trim().length > 0) {
-      chunks.push({
-        text: `Secondary Information: ${secondaryInfoText}`,
-        metadata: {
-          path: path ? `${path}.secondary_info` : "secondary_info",
-          importance: "medium",
-          type: "secondary_info",
-        },
-      });
-    }
-  }
-
-  // Process detail_sections with appropriate priorities
-  if (data.detail_sections && Array.isArray(data.detail_sections)) {
-    data.detail_sections.forEach((section: any, index: number) => {
-      if (section && typeof section === "object") {
-        const heading = section.heading || `Section ${index + 1}`;
-        const content = section.content || "";
-        const importance = section.importance_level || "medium";
-
-        // Handle structured content with high priority (especially for tables like subjects)
-        if (
-          section.structured_content &&
-          typeof section.structured_content === "object"
-        ) {
-          const structuredText = formatObjectToText(section.structured_content);
-          if (structuredText.trim().length > 0) {
-            chunks.push({
-              text: `${heading} (Structured): ${structuredText}`,
-              metadata: {
-                path: `${path ? path + "." : ""}detail_sections[${index}].structured_content`,
-                type: "structured_content",
-                heading,
-                importance: importance === "high" ? "high" : "medium", // Ensure structured content is at least medium priority
-              },
-            });
-          }
-
-          // If there are arrays in structured_content (like subject lists), process them specially
-          for (const [key, value] of Object.entries(
-            section.structured_content
-          )) {
-            if (Array.isArray(value)) {
-              value.forEach((item, itemIndex) => {
-                if (typeof item === "object") {
-                  const itemText = formatObjectToText(item);
-                  if (itemText.trim().length > 0) {
-                    chunks.push({
-                      text: `${heading} - ${key} ${itemIndex + 1}: ${itemText}`,
-                      metadata: {
-                        path: `${path ? path + "." : ""}detail_sections[${index}].structured_content.${key}[${itemIndex}]`,
-                        type: "structured_item",
-                        heading,
-                        importance: importance === "high" ? "high" : "medium",
-                      },
-                    });
-                  }
-                }
-              });
-            }
-          }
-        }
-
-        // Process the main content of the section based on importance
-        if (
-          content &&
-          typeof content === "string" &&
-          content.trim().length > 0
-        ) {
-          // For high importance sections, create smaller chunks for more precise retrieval
-          if (importance === "high") {
-            const contentChunks = chunkText(content, 500); // Smaller chunks for high importance
-            contentChunks.forEach((chunk, chunkIndex) => {
-              chunks.push({
-                text: `${heading}: ${chunk}`,
-                metadata: {
-                  path: `${path ? path + "." : ""}detail_sections[${index}]`,
-                  type: "section_content",
-                  heading,
-                  importance: "high",
-                  chunk_index: chunkIndex,
-                  total_chunks: contentChunks.length,
-                },
-              });
-            });
-          } else {
-            // For medium/low importance, use larger chunks
-            const contentChunks = chunkText(content, 1000);
-            contentChunks.forEach((chunk, chunkIndex) => {
-              chunks.push({
-                text: `${heading}: ${chunk}`,
-                metadata: {
-                  path: `${path ? path + "." : ""}detail_sections[${index}]`,
-                  type: "section_content",
-                  heading,
-                  importance: importance,
-                  chunk_index: chunkIndex,
-                  total_chunks: contentChunks.length,
-                },
-              });
-            });
-          }
-        }
-      }
-    });
-  }
-
-  // Process metadata as medium importance
-  if (data.metadata && typeof data.metadata === "object") {
-    const metadataText = formatObjectToText(data.metadata);
-    if (metadataText.trim().length > 0) {
-      chunks.push({
-        text: `Metadata: ${metadataText}`,
-        metadata: {
-          path: path ? `${path}.metadata` : "metadata",
-          type: "metadata",
-          importance: "medium",
-        },
-      });
-    }
-  }
-
-  // Process ignorable_content with low importance
-  if (data.ignorable_content && typeof data.ignorable_content === "object") {
-    const ignorableContent = data.ignorable_content.content || "";
-    if (
-      typeof ignorableContent === "string" &&
-      ignorableContent.trim().length > 100
-    ) {
-      // Create larger chunks for ignorable content
-      const contentChunks = chunkText(ignorableContent, 1500);
-      contentChunks.forEach((chunk, index) => {
-        chunks.push({
-          text: chunk,
-          metadata: {
-            path: path ? `${path}.ignorable_content` : "ignorable_content",
-            type: "ignorable",
-            importance: "low",
-            chunk_index: index,
-            total_chunks: contentChunks.length,
-          },
-        });
-      });
-    }
-  }
-
-  // Process other fields at the top level
-  for (const [key, value] of Object.entries(data)) {
-    // Skip fields we've already processed
-    if (
-      [
-        "title",
-        "primary_info",
-        "secondary_info",
-        "detail_sections",
-        "metadata",
-        "ignorable_content",
-      ].includes(key)
-    ) {
-      continue;
-    }
-
-    const newPath = path ? `${path}.${key}` : key;
-
-    // Handle string values with sufficient length
-    if (typeof value === "string" && value.trim().length > 50) {
-      chunks.push({
-        text: `${key}: ${value}`,
-        metadata: {
-          path: newPath,
-          field: key,
-          importance: "medium", // Default to medium for unclassified content
-        },
-      });
-    }
-    // Recurse into nested objects
-    else if (typeof value === "object" && value !== null) {
-      extractChunksFromStructuredData(value, chunks, newPath, depth + 1);
-    }
-  }
-};
-
-// Helper function to format objects to text
-const formatObjectToText = (obj: any): string => {
-  if (typeof obj !== "object" || obj === null) {
-    return String(obj || "");
-  }
-
-  return Object.entries(obj)
-    .filter(
-      ([_, value]) => value !== null && value !== undefined && value !== ""
-    )
-    .map(([key, value]) => {
-      if (typeof value === "object" && !Array.isArray(value)) {
-        return `${key}: ${formatObjectToText(value)}`;
-      } else if (Array.isArray(value)) {
-        return `${key}: ${value
-          .map((item) =>
-            typeof item === "object" ? formatObjectToText(item) : String(item)
-          )
-          .join(", ")}`;
-      } else {
-        return `${key}: ${value}`;
-      }
-    })
-    .join(" | ");
-};
-
-// Create embeddings from raw text (original implementation as fallback)
-const createEmbeddingsFromText = async (
-  documentId: string,
-  text: string
-): Promise<void> => {
-  try {
-    if (!text || text.trim().length === 0) {
-      console.warn("No text provided for embedding creation");
-      return;
-    }
-
-    console.log("Creating document embeddings from raw text for:", documentId);
-
-    // Chunk the text into smaller pieces
-    const chunks = chunkText(text, 1000); // Limit to ~1000 tokens per chunk
-    console.log(`Created ${chunks.length} chunks for embedding`);
-
-    // Delete any existing embeddings for this document to avoid duplicates
-    const { error: deleteError } = await supabase
-      .from("document_embeddings")
-      .delete()
-      .eq("document_id", documentId);
-
-    if (deleteError) {
-      console.warn("Error deleting existing embeddings:", deleteError);
-      // Continue with embedding creation even if deletion fails
-    }
-
-    const embeddingPromises = chunks.map(async (chunk, index) => {
-      try {
-        const embedding = await createEmbedding(chunk);
-
-        // Convert embedding array to PostgreSQL vector format
-        const vectorString = `[${embedding.join(",")}]`;
-
-        return {
-          document_id: documentId,
-          content_chunk: chunk,
-          chunk_index: index,
-          chunk_type: "text",
-          chunk_metadata: {
-            token_count: Math.ceil(chunk.length / 4), // Rough token estimate
-            chunk_length: chunk.length,
-          },
-          embedding: vectorString,
-          tokens_count: Math.ceil(chunk.length / 4),
-        };
-      } catch (error) {
-        console.error(`Error creating embedding for chunk ${index}:`, error);
-        throw error;
-      }
-    });
-
-    // Process embeddings in batches to avoid overwhelming the API
-    const batchSize = 5;
-    const embeddingResults = [];
-
-    for (let i = 0; i < embeddingPromises.length; i += batchSize) {
-      const batch = embeddingPromises.slice(i, i + batchSize);
-      const batchResults = await Promise.all(batch);
-      embeddingResults.push(...batchResults);
-
-      // Add a small delay between batches to respect rate limits
-      if (i + batchSize < embeddingPromises.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-
-    // Insert all embeddings into the database
-    if (embeddingResults.length > 0) {
-      const { error } = await supabase
-        .from("document_embeddings")
-        .insert(embeddingResults);
-
-      if (error) {
-        console.error("Error inserting embeddings:", error);
-        throw new Error(`Failed to insert embeddings: ${error.message}`);
-      }
-
-      console.log(
-        `Successfully created ${embeddingResults.length} embeddings for document:`,
-        documentId
-      );
-    } else {
-      console.warn("No embeddings created for document:", documentId);
-    }
-  } catch (error) {
-    console.error("Error creating document embeddings from text:", error);
-    throw error;
-  }
-};
-
-const formatStorageSize = (sizeInMB: number): number => {
-  // Round to one decimal place and ensure it's a valid number
-  const formattedSize = Math.max(0, Math.round((sizeInMB || 0) * 10) / 10);
-  // Ensure we return at least 0.1 MB if there is any storage used (but less than 0.1 MB)
-  if (sizeInMB > 0 && formattedSize === 0) {
-    return 0.1;
-  }
-  return isNaN(formattedSize) ? 0 : formattedSize;
-};
-
-export const documentQueries = {
-  // Get all documents for a user
-  getUserDocuments: async (userId: string): Promise<Document[]> => {
-    try {
-      const { data, error } = await supabase
-        .from("documents")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("Error fetching documents:", error);
-        return [];
-      }
-
-      return data || [];
-    } catch (error) {
-      console.error("Error in getUserDocuments:", error);
-      return [];
-    }
-  },
-
-  // Get a document by ID
-  getDocument: async (documentId: string): Promise<Document | null> => {
-    try {
-      const { data, error } = await supabase
-        .from("documents")
-        .select("*")
-        .eq("id", documentId)
-        .single();
-
       if (error) {
         console.error("Error fetching document:", error);
         return null;
@@ -1934,7 +1090,8 @@ export const documentQueries = {
       | { uri: string; name: string; type: string; size: number },
     userId: string,
     filename: string,
-    userEmail?: string
+    userEmail?: string,
+    documentType?: string
   ): Promise<Document | null> => {
     try {
       console.log("Starting upload and process for user:", userId);
@@ -1962,6 +1119,11 @@ export const documentQueries = {
       }
 
       console.log("User profile confirmed:", userProfile.email);
+
+      // Log document type if provided
+      if (documentType) {
+        console.log(`Document type provided by user: ${documentType}`);
+      }
 
       const fileExt = filename.split(".").pop();
       const fileName = `${userId}/${Date.now()}.${fileExt}`;
@@ -2049,11 +1211,12 @@ export const documentQueries = {
           "type" in file
             ? file.type
             : (file as File | Blob).type || "application/octet-stream",
-        file_size_bytes:
-          "size" in file ? file.size : (file as File | Blob).size,
-        supabase_storage_path: fileName,
-        ocr_status: "pending",
-        uploaded_at: new Date().toISOString(),
+                    file_size_bytes:
+        "size" in file ? file.size : (file as File | Blob).size,
+      supabase_storage_path: fileName,
+      ocr_status: "pending",
+      uploaded_at: new Date().toISOString(),
+      document_type: documentType || null, // Add user-provided document type
       };
 
       console.log("Creating document record...");
@@ -2076,24 +1239,24 @@ export const documentQueries = {
         console.warn("Failed to update user stats, but continuing...");
       }
 
-      // Process document asynchronously
-      console.log("Starting background processing...");
-      extractTextFromDocument(
-        newDocument.id,
-        fileName,
-        documentData.mime_type
-      ).catch((error: Error) => {
-        console.error("Background processing failed:", error);
-      });
+            // Process document asynchronously
+    console.log("Starting background processing...");
+    extractTextFromDocument(
+      newDocument.id,
+      fileName,
+      documentData.mime_type
+    ).catch((error: Error) => {
+      console.error("Background processing failed:", error);
+    });
 
-      return newDocument;
+    return newDocument;
     } catch (error) {
       console.error("Error in uploadAndProcessDocument:", error);
       return null;
     }
   },
 
-  // Update user document stats
+  // Update user document stats - fixed to handle numeric storage properly
   updateUserStats: async (
     userId: string,
     newFileSize: number
@@ -2111,20 +1274,18 @@ export const documentQueries = {
         return false;
       }
 
-      // Update stats
+      // Update document count
       const newDocCount = Math.floor((userData.document_count || 0) + 1);
 
-      // Convert bytes to MB with better precision
+      // Convert bytes to MB with proper precision and ensure numeric type
       const currentStorageMB = parseFloat(
-        userData.storage_used_mb?.toString() || "0"
+        String(userData.storage_used_mb || 0)
       );
-
-      // Calculate additional storage with precision
       const additionalStorageMB = newFileSize / (1024 * 1024);
 
       // Calculate new storage with one decimal place precision
       const rawNewStorage = currentStorageMB + additionalStorageMB;
-      const newStorageUsed = parseFloat(rawNewStorage.toFixed(1));
+      const newStorageUsed = Math.round(rawNewStorage * 10) / 10; // Round to 1 decimal place
 
       console.log("Updating user stats with:", {
         currentStorageMB,
@@ -2154,28 +1315,38 @@ export const documentQueries = {
     }
   },
 
-  // Search documents by similarity
+  // Search documents by similarity with improved relevance
   searchDocumentsByEmbedding: async (
     query: string,
     userId: string,
-    limit: number = 10
+    limit: number = 10,
+    options: {
+      documentType?: string;
+      minThreshold?: number;
+      includeContext?: boolean;
+    } = {}
   ): Promise<{
     documents: Document[];
     chunks: DocumentEmbedding[];
     similarities: number[];
   }> => {
     try {
+      // Process the query to expand it slightly for better matches
+      const enhancedQuery = await enhanceSearchQuery(query);
+
       // Create embedding for the query
-      const queryEmbedding = await createEmbedding(query);
+      const queryEmbedding = await createEmbedding(enhancedQuery);
+
+      // Set dynamic threshold based on query complexity
+      const defaultThreshold = options.minThreshold || 0.65; // Lower from 0.7 for better recall
 
       // Search for similar document chunks using cosine similarity
-      // Use any cast for the RPC function since it's not in the generated types
       const { data: similarChunks, error } = await (supabase as any).rpc(
         "search_document_embeddings",
         {
           query_embedding: queryEmbedding,
-          match_threshold: 0.7,
-          match_count: limit,
+          match_threshold: defaultThreshold,
+          match_count: limit * 2, // Get more candidates for filtering
           user_id: userId,
         }
       );
@@ -2187,9 +1358,29 @@ export const documentQueries = {
 
       const searchResults = (similarChunks as SearchResult[]) || [];
 
+      // Filter by document type if specified
+      let filteredResults = searchResults;
+      if (options.documentType) {
+        filteredResults = searchResults.filter((result) => {
+          const metadata = result.chunk_metadata || {};
+          return metadata.document_type === options.documentType;
+        });
+
+        // If no results after filtering, fall back to original results
+        if (filteredResults.length === 0) {
+          filteredResults = searchResults;
+        }
+      }
+
+      // Apply a smarter ranking that considers both similarity and importance
+      const rankedResults = rankSearchResults(filteredResults);
+
+      // Limit to requested number after ranking
+      const finalResults = rankedResults.slice(0, limit);
+
       // Get the unique document IDs
       const documentIds = [
-        ...new Set(searchResults.map((chunk) => chunk.document_id)),
+        ...new Set(finalResults.map((chunk) => chunk.document_id)),
       ];
 
       // Fetch the actual documents
@@ -2202,20 +1393,43 @@ export const documentQueries = {
         console.error("Error fetching documents:", docError);
         return {
           documents: [],
-          chunks: searchResults as any,
+          chunks: finalResults as any,
           similarities: [],
         };
       }
 
       return {
         documents: documents || [],
-        chunks: searchResults as any,
-        similarities: searchResults.map((chunk) => chunk.similarity),
+        chunks: finalResults as any,
+        similarities: finalResults.map((chunk) => chunk.similarity),
       };
     } catch (error) {
       console.error("Error in searchDocumentsByEmbedding:", error);
       return { documents: [], chunks: [], similarities: [] };
     }
+  },
+
+  // Search documents wrapper that prompts for document type
+  searchDocuments: async (
+    query: string,
+    userId: string,
+    options: {
+      documentType?: string;
+      limit?: number;
+      minThreshold?: number;
+    } = {}
+  ): Promise<{
+    documents: Document[];
+    chunks: DocumentEmbedding[];
+    similarities: number[];
+  }> => {
+    const limit = options.limit || 10;
+
+    return documentQueries.searchDocumentsByEmbedding(query, userId, limit, {
+      documentType: options.documentType,
+      minThreshold: options.minThreshold || 0.65,
+      includeContext: true,
+    });
   },
 
   // Retry failed document processing
@@ -2306,7 +1520,7 @@ const processTextWithGPT = async (
   }
 };
 
-// Helper function to update user stats after document deletion
+// Helper function to update user stats after document deletion - fixed for numeric storage
 const updateUserStatsAfterDeletion = async (
   userId: string,
   fileSizeBytes: number
@@ -2332,18 +1546,16 @@ const updateUserStatsAfterDeletion = async (
     const newDocCount = Math.max(0, (userData.document_count || 1) - 1);
 
     // Convert file size from bytes to MB with better precision
-    // Use a more precise conversion that keeps decimal points
     const fileSizeMB = fileSizeBytes / (1024 * 1024);
 
     // Ensure storage_used_mb never goes below 0
-    const currentStorageMB = parseFloat(
-      userData.storage_used_mb?.toString() || "0"
-    );
+    // Parse as float to ensure it's a numeric type for the database
+    const currentStorageMB = parseFloat(String(userData.storage_used_mb || 0));
 
     // Calculate new storage with one decimal place precision
     const newStorageUsed = Math.max(
       0,
-      parseFloat((currentStorageMB - fileSizeMB).toFixed(1))
+      Math.round((currentStorageMB - fileSizeMB) * 10) / 10
     );
 
     console.log("Updating user stats after deletion:", {
@@ -2373,4 +1585,35 @@ const updateUserStatsAfterDeletion = async (
     console.error("Error in updateUserStatsAfterDeletion:", error);
     return false;
   }
+};
+
+// Helper function to enhance search query
+const enhanceSearchQuery = async (query: string): Promise<string> => {
+  // For simple implementation, just return the original query
+  // In a future enhancement, this could use GPT to expand the query
+  return query;
+};
+
+// Helper function to rank search results with weighted scoring
+const rankSearchResults = (results: SearchResult[]): SearchResult[] => {
+  return results
+    .map((result) => {
+      // Get importance from metadata
+      const metadata = result.chunk_metadata || {};
+      const importance = metadata.importance || "medium";
+
+      // Apply importance weights
+      let importanceWeight = 1.0;
+      if (importance === "high") {
+        importanceWeight = 1.5;
+      } else if (importance === "low") {
+        importanceWeight = 0.7;
+      }
+
+      // Calculate weighted score (modifies similarity in place)
+      result.similarity = result.similarity * importanceWeight;
+
+      return result;
+    })
+    .sort((a, b) => b.similarity - a.similarity);
 };
