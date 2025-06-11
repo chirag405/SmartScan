@@ -118,6 +118,7 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
       }
 
       const asset = result.assets[0];
+
       const fileUri = asset.uri;
       const fileName =
         "name" in asset
