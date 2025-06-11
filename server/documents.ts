@@ -31,8 +31,34 @@ export interface DocumentStats {
 }
 
 // Initialize OpenAI client for embeddings
+console.log(`📋 Creating OpenAI client with API key from config...`);
+console.log(
+  `🔧 API Key status: ${config.openai.apiKey ? "Present" : "Missing"}`
+);
+console.log(
+  `🔧 API Key from config: ${config.openai.apiKey ? config.openai.apiKey.substring(0, 8) + "..." : "NONE"}`
+);
+
+// Check if we have an API key directly from environment (fallback)
+const envApiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+console.log(
+  `🔧 Environment API Key: ${envApiKey ? envApiKey.substring(0, 8) + "..." : "NONE"}`
+);
+
+// Use environment variable or config for API key
+const hardcodedApiKey = process.env.OPENAI_API_KEY || "";
+console.log(
+  `🔧 Using API Key from environment: ${hardcodedApiKey ? hardcodedApiKey.substring(0, 8) + "..." : "Not found"}`
+);
+
+// Use the first available key
+const finalApiKey = config.openai.apiKey || envApiKey || hardcodedApiKey;
+console.log(
+  `🔧 Final API Key: ${finalApiKey.substring(0, 8)}... (length: ${finalApiKey.length})`
+);
+
 const openai = new OpenAI({
-  apiKey: config.openai.apiKey,
+  apiKey: finalApiKey,
   dangerouslyAllowBrowser: true, // Required for React Native
 });
 
@@ -500,10 +526,13 @@ const extractTextFromDocument = async (
                     { textLength: extractedText.length, confidence }
                   );
 
-                  await documentQueries.updateDocument(documentId, {
-                    ocr_confidence_score: confidence,
-                    ocr_status: "extracted",
-                  });
+                  const { error: updateError1 } = await supabase
+                    .from("documents")
+                    .update({
+                      ocr_confidence_score: confidence,
+                      ocr_status: "extracted",
+                    })
+                    .eq("id", documentId);
 
                   // 2. Process the text with GPT to clean it up
                   logProcessingStep(
@@ -513,10 +542,38 @@ const extractTextFromDocument = async (
                     { originalTextLength: extractedText.length }
                   );
 
+                  console.log(
+                    `\n🔄 CALLING GPT PROCESSING for document: ${documentId}`
+                  );
+                  console.log(
+                    `📄 Text to process: ${extractedText.length} characters`
+                  );
+                  console.log(
+                    `🎯 First 500 chars: ${extractedText.substring(0, 500)}...`
+                  );
+
                   const processedResult = await processTextWithGPTStructured(
                     extractedText,
                     documentId
                   );
+
+                  console.log(
+                    `\n📋 GPT PROCESSING RESULT for document: ${documentId}`
+                  );
+                  console.log(`✅ Success: ${processedResult.success}`);
+                  console.log(
+                    `📝 Processed text length: ${processedResult.processedText?.length || 0}`
+                  );
+                  console.log(
+                    `⏱️ Processing time: ${processedResult.metadata.processingTime}ms`
+                  );
+                  console.log(`🎭 Status: ${processedResult.metadata.status}`);
+                  if (!processedResult.success) {
+                    console.log(`❌ Error: ${processedResult.metadata.error}`);
+                    console.log(
+                      `🔍 Reason: ${processedResult.metadata.reason}`
+                    );
+                  }
 
                   if (
                     processedResult.success &&
@@ -570,10 +627,10 @@ const extractTextFromDocument = async (
                       );
                     }
 
-                    await documentQueries.updateDocument(
-                      documentId,
-                      updateData
-                    );
+                    const { error: updateError2 } = await supabase
+                      .from("documents")
+                      .update(updateData)
+                      .eq("id", documentId);
 
                     // 5. Generate embeddings for improved search
                     logProcessingStep(
@@ -629,10 +686,13 @@ const extractTextFromDocument = async (
                       }
                     );
 
-                    await documentQueries.updateDocument(documentId, {
-                      ocr_status: "fallback",
-                      processed_at: new Date().toISOString(),
-                    });
+                    const { error: updateError3 } = await supabase
+                      .from("documents")
+                      .update({
+                        ocr_status: "fallback",
+                        processed_at: new Date().toISOString(),
+                      })
+                      .eq("id", documentId);
 
                     // Still try to create embeddings with raw text
                     logProcessingStep(
@@ -660,12 +720,15 @@ const extractTextFromDocument = async (
                     }
                   );
 
-                  await documentQueries.updateDocument(documentId, {
-                    ocr_status: "error",
-                    processed_at: new Date().toISOString(),
-                    processed_text:
-                      "Error during document processing. Please try again.",
-                  } as any);
+                  const { error: updateError4 } = await supabase
+                    .from("documents")
+                    .update({
+                      ocr_status: "error",
+                      processed_at: new Date().toISOString(),
+                      processed_text:
+                        "Error during document processing. Please try again.",
+                    })
+                    .eq("id", documentId);
                 }
               }
 
@@ -810,6 +873,16 @@ export const processTextWithGPTStructured = async (
   originalText?: string;
   metadata: GPTProcessingMetadata;
 }> => {
+  console.log(
+    `\n🎬 ENTERING processTextWithGPTStructured for document: ${documentId}`
+  );
+  console.log(`📥 Input params:`, {
+    textLength: rawText?.length || 0,
+    documentType: options.documentType,
+    includeOriginalText: options.includeOriginalText,
+    logFullResponse: options.logFullResponse,
+  });
+
   const startTime = Date.now();
   const metadata: GPTProcessingMetadata = {
     documentId,
@@ -821,8 +894,12 @@ export const processTextWithGPTStructured = async (
   };
 
   try {
+    console.log(
+      `🔍 VALIDATION CHECK: Text exists: ${!!rawText}, Length: ${rawText?.length || 0}`
+    );
+
     if (!rawText || rawText.trim().length === 0) {
-      console.warn("No text provided for GPT processing");
+      console.warn("⚠️ EARLY EXIT: No text provided for GPT processing");
 
       metadata.status = "skipped";
       metadata.reason = "Empty input text";
@@ -844,12 +921,16 @@ export const processTextWithGPTStructured = async (
       };
     }
 
-    console.log(`Processing text with GPT for document: ${documentId}`);
-    console.log(`Original text length: ${rawText.length} characters`);
+    console.log(
+      `✅ VALIDATION PASSED: Processing text with GPT for document: ${documentId}`
+    );
+    console.log(`📊 Original text length: ${rawText.length} characters`);
 
     // If text is very short, no need to process
     if (rawText.length < 100) {
-      console.log("Text too short for GPT processing, using as is");
+      console.log(
+        "⚠️ EARLY EXIT: Text too short for GPT processing, using as is"
+      );
 
       metadata.status = "skipped";
       metadata.reason = "Text too short";
@@ -871,33 +952,377 @@ export const processTextWithGPTStructured = async (
       };
     }
 
+    console.log(
+      `🔄 PROCEEDING TO GPT PROCESSING: Text length is sufficient (${rawText.length} chars)`
+    );
+    console.log(
+      `🎯 Sample text (first 300 chars): ${rawText.substring(0, 300)}...`
+    );
+
     // Get existing document type from database if not provided in options
-    let documentType = options.documentType;
-    if (!documentType) {
+    let currentDocType = options.documentType;
+    console.log(`📄 Document type from options: ${currentDocType || "none"}`);
+
+    if (!currentDocType) {
       try {
+        console.log(
+          `🔍 Fetching document type from database for id: ${documentId}`
+        );
         const { data, error } = await supabase
           .from("documents")
           .select("document_type")
           .eq("id", documentId)
           .single();
-          
+
+        if (error) {
+          console.log(`❌ Error fetching document type: ${error.message}`);
+        }
+
         if (!error && data && data.document_type) {
-          documentType = data.document_type;
-          console.log(`Using existing document type from database: ${documentType}`);
+          currentDocType = data.document_type;
+          console.log(
+            `✅ Using existing document type from database: ${currentDocType}`
+          );
+        } else {
+          console.log(`ℹ️ No document type found in database`);
         }
       } catch (err) {
         // Ignore error, we'll proceed without document type
-        console.log("Could not retrieve document type from database");
+        console.log(
+          `❌ Exception retrieving document type: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
 
     // Include document type hint in the prompt if available
-    const documentTypeHint = documentType 
-      ? `\nIMPORTANT: This document appears to be a "${documentType}". Consider this document type in your analysis.` 
-      : '';
+    const documentTypeHint = currentDocType
+      ? `\nIMPORTANT: This document appears to be a "${currentDocType}". Consider this document type in your analysis.`
+      : "";
+
+    console.log(`🏷️ Document type hint: ${documentTypeHint || "none"}`);
+
+    // Ensure we're going to make a valid API call with proper parameters
+    console.log(`⚙️ Pre-API call validation checks:`);
+    console.log(`- Text length: ${rawText.length}`);
+    console.log(`- Document ID: ${documentId}`);
+    console.log(`- Document type: ${currentDocType || "unknown"}`);
+    console.log(`- OpenAI Client initialized: ${!!openai}`);
+    console.log(`- API Key available: ${!!finalApiKey}`);
 
     // Prepare prompt for GPT
     const prompt = `
+You are a document analysis expert specializing in extracting document-specific information while filtering out generic content. Your task is to intelligently analyze ANY type of document and extract ONLY the unique, valuable information specific to this document.
+
+Document text:
+${rawText.slice(0, 15000)} // Limit to prevent token overflow
+
+INTELLIGENT EXTRACTION APPROACH:
+
+STEP 1 - DOCUMENT UNDERSTANDING:
+First, identify what type of document this is based on its content, structure, and purpose.
+
+STEP 2 - SMART FIELD IDENTIFICATION:
+Automatically identify the most important data fields present in this specific document by analyzing:
+- Personal identifiers (names, IDs, numbers)
+- Dates and time-sensitive information
+- Monetary values and quantities
+- Addresses and contact details
+- Reference numbers and codes
+- Specific measurements or technical data
+- Unique terms, conditions, or specifications
+- Relationships between entities mentioned
+
+STEP 3 - GENERIC CONTENT FILTERING:
+Intelligently exclude ALL generic content that would appear on similar documents:
+- Standard disclaimers and legal boilerplate
+- Generic warnings and precautionary statements
+- Common instructions or usage guidelines
+- Standard contact information for organizations
+- Typical headers, footers, and watermarks
+- Security feature descriptions
+- General terms and conditions
+- Processing notices that appear on all similar documents
+- Standard format explanations
+
+DYNAMIC RESPONSE FORMAT:
+Based on the document analysis, create a logical structure that best represents the important information:
+
+Document Type: [Identify the specific type/purpose of this document]
+
+Core Information:
+[Extract and present the most essential document-specific information in a clear, structured paragraph. Focus on the primary purpose and key data points that make this document unique and valuable.]
+
+Detailed Specifications:
+[Organize additional important information logically based on what's actually present in the document. Group related data together in a way that makes sense for this specific document type.]
+
+Reference & Identification Data:
+[List all unique identifiers, codes, numbers, and reference data with their exact values and context.]
+
+Additional Context:
+[Include any other document-specific information that provides important context or details unique to this particular document.]
+
+ADAPTIVE FORMATTING RULES:
+- Automatically adjust the information groupings based on document content
+- Use clear, descriptive section headers that match the document's nature
+- Present information in logical flow relevant to the document's purpose
+- Preserve exact formatting of numbers, dates, codes, and technical specifications
+- Use plain text without markdown or special formatting
+- Group related information together naturally
+- Be comprehensive about document-specific details while excluding generic content
+
+INTELLIGENT GUIDELINES:
+- Analyze the document's purpose and structure to determine the most logical way to present information
+- Focus on extracting what makes THIS specific document unique and valuable
+- Automatically adapt the response structure to best serve the document's content
+- Preserve all critical data exactly as it appears in the original
+- Filter out repetitive or standard content intelligently
+- Present information in a way that would be most useful for someone needing to reference this specific document
+- Do not force information into predefined categories - let the document's content determine the structure
+
+CRITICAL SUCCESS FACTORS:
+- ONLY include information that is specific to THIS document
+- Completely exclude generic text that appears on all similar documents
+- Automatically organize information in the most logical way for this document type
+- Be thorough in extracting unique, valuable information
+- Present data in a clear, accessible format without unnecessary complexity
+`;
+
+    // Process with OpenAI
+    console.log(`\n🤖 STARTING OPENAI PROCESSING for document: ${documentId}`);
+    console.log(`📊 Prompt length: ${prompt.length} characters`);
+    console.log(`🔧 OpenAI API Key configured: ${!!config.openai.apiKey}`);
+    console.log(
+      `🔧 Environment API Key available: ${!!process.env.EXPO_PUBLIC_OPENAI_API_KEY}`
+    );
+    console.log(`🔧 Final API Key in use: ${!!finalApiKey}`);
+    console.log(`📝 Raw text length: ${rawText.length} characters`);
+
+    // Time this section to detect hanging
+    const preApiCallTime = Date.now();
+
+    // Verify and log the actual API key value (securely, just first few chars)
+    const apiKey = config.openai.apiKey;
+    console.log(`🔑 OpenAI API Key status: ${apiKey ? "Found" : "Missing"}`);
+    if (apiKey) {
+      console.log(`🔑 API Key prefix: ${apiKey.substring(0, 8)}...`);
+      console.log(`🔑 API Key length: ${apiKey.length} characters`);
+    } else {
+      throw new Error("OpenAI API key is not configured");
+    }
+
+    try {
+      // Create new OpenAI instance with explicit API key to ensure it's used
+      console.log(`🔨 Creating new OpenAI instance with explicit API key...`);
+
+      const openaiWithKey = new OpenAI({
+        apiKey: apiKey,
+        dangerouslyAllowBrowser: true,
+      });
+
+      console.log(`✅ OpenAI client created successfully`);
+      console.log(`⏱️ Time to create client: ${Date.now() - preApiCallTime}ms`);
+      console.log(`🚀 Making OpenAI API call...`);
+      const apiStartTime = Date.now();
+
+      // Add timeout to detect hanging API calls
+      const API_TIMEOUT_MS = 30000; // 30 seconds
+      let apiCallTimedOut = false;
+
+      // Create timeout for the API call
+      const apiTimeoutId = setTimeout(() => {
+        apiCallTimedOut = true;
+        console.error(
+          `⏰ API CALL TIMEOUT: OpenAI call took more than ${API_TIMEOUT_MS / 1000} seconds!`
+        );
+        console.error(
+          `This suggests a network issue, API problem, or some other blocking condition.`
+        );
+      }, API_TIMEOUT_MS);
+
+      // Fallback to a simpler prompt if the main one is too large
+      const effectivePrompt =
+        prompt.length > 12000
+          ? `Extract key information from this document: ${rawText.substring(0, 5000)}...`
+          : prompt;
+
+      console.log(
+        `📏 Using prompt with length: ${effectivePrompt.length} characters`
+      );
+
+      console.log(`⏱️ About to call OpenAI API at ${new Date().toISOString()}`);
+
+      const response = await openaiWithKey.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: effectivePrompt }],
+        max_tokens: 2000,
+        temperature: 0.1,
+      });
+
+      // Clear the timeout since we got a response
+      clearTimeout(apiTimeoutId);
+
+      if (apiCallTimedOut) {
+        console.log(`⚠️ API call completed after timeout was triggered`);
+      }
+
+      const apiEndTime = Date.now();
+      console.log(
+        `⏱️ OpenAI API call completed in ${apiEndTime - apiStartTime}ms`
+      );
+
+      console.log(`📥 OpenAI Response received:`, {
+        id: response.id,
+        model: response.model,
+        usage: response.usage,
+        choicesLength: response.choices?.length || 0,
+        finishReason: response.choices?.[0]?.finish_reason,
+      });
+
+      const processedText = response.choices?.[0]?.message?.content?.trim();
+
+      console.log(
+        `📤 Processed text length: ${processedText?.length || 0} characters`
+      );
+      console.log(
+        `🎯 First 200 chars of processed text: ${processedText?.substring(0, 200) || "NO TEXT"}...`
+      );
+
+      if (!processedText) {
+        console.error(`❌ No processed text received from GPT!`);
+        console.error(
+          `🔍 Full response object:`,
+          JSON.stringify(response, null, 2)
+        );
+        throw new Error("No processed text received from GPT");
+      }
+
+      metadata.status = "success";
+      metadata.processingTime = Date.now() - startTime;
+      metadata.characterCount = processedText.length;
+      metadata.fullResponse = {
+        id: response.id,
+        model: response.model,
+        usage: response.usage,
+        finishReason: response.choices?.[0]?.finish_reason,
+      };
+
+      console.log(`✅ GPT processing successful for document: ${documentId}`);
+      console.log(`📈 Processing stats:`, {
+        totalTime: metadata.processingTime,
+        apiTime: apiEndTime - apiStartTime,
+        inputLength: rawText.length,
+        outputLength: processedText.length,
+        tokenUsage: response.usage,
+      });
+
+      logStructuredDataProcessing({
+        documentId,
+        originalText: options.includeOriginalText ? rawText : undefined,
+        processedText,
+        status: "success",
+        metadata: { processingTime: metadata.processingTime },
+      });
+
+      console.log(`🎉 RETURNING SUCCESS RESULT for document: ${documentId}`);
+      console.log(
+        `📦 Final result preview: ${processedText.substring(0, 200)}...`
+      );
+
+      return {
+        success: true,
+        processedText,
+        originalText: options.includeOriginalText ? rawText : undefined,
+        metadata,
+      };
+    } catch (apiError: any) {
+      console.error(`💥 OpenAI API Error for document ${documentId}:`, {
+        errorMessage: apiError.message,
+        errorType: apiError.constructor.name,
+        errorCode: apiError.code,
+        errorStatus: apiError.status,
+        errorHeaders: apiError.headers,
+        fullError: JSON.stringify(apiError, null, 2),
+      });
+
+      // Re-throw the error to be caught by the outer try-catch
+      throw new Error(
+        `OpenAI API failed: ${apiError.message || "Unknown error"}`
+      );
+    }
+  } catch (error) {
+    console.error(
+      `💥 MAJOR ERROR in processTextWithGPTStructured for document: ${documentId}`
+    );
+    console.error(`🔍 Error details:`, {
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+      errorStack: error instanceof Error ? error.stack : "No stack trace",
+      documentId,
+      textLength: rawText?.length || 0,
+      processingTime: Date.now() - startTime,
+    });
+
+    metadata.status = "failure";
+    metadata.processingTime = Date.now() - startTime;
+    metadata.error = error instanceof Error ? error.message : String(error);
+
+    logStructuredDataProcessing({
+      documentId,
+      originalText: options.includeOriginalText ? rawText : undefined,
+      processedText: null,
+      status: "failure",
+      error,
+      metadata,
+    });
+
+    console.error(`🏁 RETURNING FAILURE RESULT for document: ${documentId}`);
+
+    return {
+      success: false,
+      processedText: null,
+      originalText: options.includeOriginalText ? rawText : undefined,
+      metadata,
+    };
+  }
+};
+
+// Format storage size helper function
+const formatStorageSize = (sizeInMB: number): number => {
+  return Math.round(sizeInMB * 10) / 10; // Round to 1 decimal place
+};
+
+// Export documentQueries object
+export const documentQueries = {
+  // Get all documents for a user
+  getUserDocuments: async (userId: string): Promise<Document[]> => {
+    try {
+      const { data, error } = await supabase
+        .from("documents")
+        .select("*")
+        .eq("user_id", userId)
+        .order("uploaded_at", { ascending: false });
+
+      if (error) {
+        console.error("Error fetching user documents:", error);
+        return [];
+      }
+
+      return data || [];
+    } catch (error) {
+      console.error("Error in getUserDocuments:", error);
+      return [];
+    }
+  },
+
+  // Get a single document by ID
+  getDocument: async (documentId: string): Promise<Document | null> => {
+    try {
+      const { data, error } = await supabase
+        .from("documents")
+        .select("*")
+        .eq("id", documentId)
+        .single();
+
       if (error) {
         console.error("Error fetching document:", error);
         return null;
@@ -906,44 +1331,6 @@ export const processTextWithGPTStructured = async (
       return data;
     } catch (error) {
       console.error("Error in getDocument:", error);
-      return null;
-    }
-  },
-
-  // Get user document statistics
-  getUserStats: async (userId: string): Promise<DocumentStats | null> => {
-    try {
-      // Get user record first
-      const { data: userData, error: userError } = await supabase
-        .from("users")
-        .select("document_count, storage_used_mb")
-        .eq("id", userId)
-        .single();
-
-      if (userError) {
-        console.error("Error fetching user stats:", userError);
-        return null;
-      }
-
-      // Count processed documents (including both completed and fallback)
-      const { count: processedCount, error: countError } = await supabase
-        .from("documents")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", userId)
-        .in("ocr_status", ["completed", "fallback"]);
-
-      if (countError) {
-        console.error("Error counting processed documents:", countError);
-        // Continue with partial data
-      }
-
-      return {
-        totalDocuments: userData.document_count || 0,
-        processedDocuments: processedCount || 0,
-        storageUsedMB: formatStorageSize(userData.storage_used_mb || 0),
-      };
-    } catch (error) {
-      console.error("Error in getUserStats:", error);
       return null;
     }
   },
@@ -1145,10 +1532,13 @@ export const processTextWithGPTStructured = async (
 
             // Upload the blob to Supabase Storage
             console.log("Uploading blob from HTTP URI...");
-            uploadPath = await documentQueries.uploadFileToStorage(
-              blob,
-              fileName
-            );
+            const { data: uploadData, error: uploadError } =
+              await supabase.storage.from("documents").upload(fileName, blob);
+
+            if (uploadError) {
+              throw uploadError;
+            }
+            uploadPath = uploadData.path;
           }
           // For file:// URIs or other local paths, we might need to use a different approach
           // This might require a native module or specific platform handling
@@ -1190,10 +1580,15 @@ export const processTextWithGPTStructured = async (
       } else {
         // Handle regular File/Blob upload for web
         console.log("Uploading file to storage...");
-        uploadPath = await documentQueries.uploadFileToStorage(
-          file as File | Blob,
-          fileName
-        );
+        const { data: uploadData2, error: uploadError2 } =
+          await supabase.storage
+            .from("documents")
+            .upload(fileName, file as File | Blob);
+
+        if (uploadError2) {
+          throw uploadError2;
+        }
+        uploadPath = uploadData2.path;
         if (!uploadPath) {
           throw new Error("Failed to upload file to storage");
         }
@@ -1211,17 +1606,22 @@ export const processTextWithGPTStructured = async (
           "type" in file
             ? file.type
             : (file as File | Blob).type || "application/octet-stream",
-                    file_size_bytes:
-        "size" in file ? file.size : (file as File | Blob).size,
-      supabase_storage_path: fileName,
-      ocr_status: "pending",
-      uploaded_at: new Date().toISOString(),
-      document_type: documentType || null, // Add user-provided document type
+        file_size_bytes:
+          "size" in file ? file.size : (file as File | Blob).size,
+        supabase_storage_path: fileName,
+        ocr_status: "pending",
+        uploaded_at: new Date().toISOString(),
+        document_type: documentType || null, // Add user-provided document type
       };
 
       console.log("Creating document record...");
-      const newDocument = await documentQueries.createDocument(documentData);
-      if (!newDocument) {
+      const { data: newDocument, error: createError } = await supabase
+        .from("documents")
+        .insert(documentData)
+        .select()
+        .single();
+
+      if (createError || !newDocument) {
         // Clean up uploaded file if document creation fails
         await supabase.storage.from("documents").remove([fileName]);
         throw new Error("Failed to create document record");
@@ -1231,27 +1631,88 @@ export const processTextWithGPTStructured = async (
 
       // Update user stats
       console.log("Updating user stats...");
-      const statsUpdated = await documentQueries.updateUserStats(
-        userId,
-        file.size
-      );
-      if (!statsUpdated) {
-        console.warn("Failed to update user stats, but continuing...");
+      // Update user stats inline
+      try {
+        const { data: userData, error: userError } = await supabase
+          .from("users")
+          .select("document_count, storage_used_mb")
+          .eq("id", userId)
+          .single();
+
+        if (!userError && userData) {
+          const fileSize =
+            "size" in file ? file.size : (file as File | Blob).size;
+          const newDocCount = Math.floor((userData.document_count || 0) + 1);
+          const currentStorageMB = parseFloat(
+            String(userData.storage_used_mb || 0)
+          );
+          const additionalStorageMB = fileSize / (1024 * 1024);
+          const newStorageUsed =
+            Math.round((currentStorageMB + additionalStorageMB) * 10) / 10;
+
+          await supabase
+            .from("users")
+            .update({
+              document_count: newDocCount,
+              storage_used_mb: newStorageUsed,
+            })
+            .eq("id", userId);
+        }
+      } catch (statsError) {
+        console.warn("Failed to update user stats:", statsError);
       }
 
-            // Process document asynchronously
-    console.log("Starting background processing...");
-    extractTextFromDocument(
-      newDocument.id,
-      fileName,
-      documentData.mime_type
-    ).catch((error: Error) => {
-      console.error("Background processing failed:", error);
-    });
+      // Process document asynchronously
+      console.log("Starting background processing...");
+      extractTextFromDocument(
+        newDocument.id,
+        fileName,
+        documentData.mime_type
+      ).catch((error: Error) => {
+        console.error("Background processing failed:", error);
+      });
 
-    return newDocument;
+      return newDocument;
     } catch (error) {
       console.error("Error in uploadAndProcessDocument:", error);
+      return null;
+    }
+  },
+
+  // Get user document statistics
+  getUserStats: async (userId: string): Promise<DocumentStats | null> => {
+    try {
+      // Get user record first
+      const { data: userData, error: userError } = await supabase
+        .from("users")
+        .select("document_count, storage_used_mb")
+        .eq("id", userId)
+        .single();
+
+      if (userError) {
+        console.error("Error fetching user stats:", userError);
+        return null;
+      }
+
+      // Count processed documents (including both completed and fallback)
+      const { count: processedCount, error: countError } = await supabase
+        .from("documents")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .in("ocr_status", ["completed", "fallback"]);
+
+      if (countError) {
+        console.error("Error counting processed documents:", countError);
+        // Continue with partial data
+      }
+
+      return {
+        totalDocuments: userData.document_count || 0,
+        processedDocuments: processedCount || 0,
+        storageUsedMB: formatStorageSize(userData.storage_used_mb || 0),
+      };
+    } catch (error) {
+      console.error("Error in getUserStats:", error);
       return null;
     }
   },
@@ -1616,4 +2077,391 @@ const rankSearchResults = (results: SearchResult[]): SearchResult[] => {
       return result;
     })
     .sort((a, b) => b.similarity - a.similarity);
+};
+
+/**
+ * Classify document type and extract structured data using GPT
+ *
+ * This function analyzes the processed text from a document and:
+ * 1. Determines the document type (e.g., invoice, resume, contract)
+ * 2. Extracts structured data specific to that document type
+ *
+ * @param processedText - The cleaned and processed text from GPT
+ * @param documentId - The ID of the document being processed
+ * @returns Classification results including document type and structured data
+ */
+const classifyDocumentAndExtractData = async (
+  processedText: string,
+  documentId: string
+): Promise<{
+  success: boolean;
+  documentType: string;
+  structuredData: any;
+  confidence: number;
+}> => {
+  try {
+    logProcessingStep(
+      documentId,
+      "CLASSIFICATION",
+      "Starting document classification and data extraction",
+      { textLength: processedText.length }
+    );
+
+    // Default values
+    const defaultResult = {
+      success: false,
+      documentType: "unknown",
+      structuredData: {},
+      confidence: 0,
+    };
+
+    if (!processedText || processedText.trim().length === 0) {
+      console.error("No text provided for classification");
+      return defaultResult;
+    }
+
+    // Prepare the prompt for GPT to classify the document and extract data
+    const prompt = `
+You are an expert document analyzer with the task of identifying document type and extracting structured data.
+
+DOCUMENT TEXT:
+${processedText.substring(0, 10000)} // Limit text to prevent token overflow
+
+TASK 1 - DOCUMENT CLASSIFICATION:
+Analyze the text and determine the most specific document type from these categories:
+- Invoice/Receipt
+- Resume/CV
+- Contract/Agreement
+- Medical Record
+- Financial Statement
+- Legal Document
+- Academic Paper
+- Report
+- Letter/Email
+- ID Document
+- Certificate
+- Other (please specify)
+
+TASK 2 - STRUCTURED DATA EXTRACTION:
+Based on the identified document type, extract the most relevant structured data as JSON.
+Include only data that is actually present in the document.
+
+OUTPUT FORMAT:
+Respond ONLY with a JSON object that has these fields:
+{
+  "documentType": "the specific document type",
+  "confidence": 0.X, // your confidence in the classification from 0.1 to 0.9
+  "structuredData": {
+    // Document-specific fields based on the document type
+    // For example, for an invoice:
+    "invoiceNumber": "...",
+    "date": "...",
+    "totalAmount": "...",
+    "vendor": "...",
+    // etc.
+  }
+}
+`;
+
+    console.log("Calling OpenAI for document classification...");
+    console.log(`Prompt length: ${prompt.length} chars`);
+
+    // Call OpenAI API
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 1500,
+      temperature: 0.2,
+    });
+
+    const responseText = response.choices[0]?.message?.content?.trim();
+
+    if (!responseText) {
+      console.error("No response received from OpenAI for classification");
+      return defaultResult;
+    }
+
+    console.log(
+      `Received classification response: ${responseText.substring(0, 200)}...`
+    );
+
+    try {
+      // Parse the JSON response
+      // Extract just the JSON part if there's additional text
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      const jsonString = jsonMatch ? jsonMatch[0] : responseText;
+
+      const classificationData = JSON.parse(jsonString);
+
+      logProcessingStep(
+        documentId,
+        "CLASSIFICATION COMPLETE",
+        `Document classified as: ${classificationData.documentType}`,
+        { confidence: classificationData.confidence }
+      );
+
+      return {
+        success: true,
+        documentType: classificationData.documentType || "unknown",
+        structuredData: classificationData.structuredData || {},
+        confidence: classificationData.confidence || 0.5,
+      };
+    } catch (parseError) {
+      console.error("Error parsing classification response:", parseError);
+      console.log("Response that failed to parse:", responseText);
+
+      // Try to extract document type from text if JSON parsing failed
+      const typeMatch = responseText.match(
+        /documentType["']?\s*:\s*["']([^"']+)["']/i
+      );
+      const documentType = typeMatch ? typeMatch[1] : "unknown";
+
+      return {
+        success: false,
+        documentType,
+        structuredData: { rawText: processedText.substring(0, 500) + "..." },
+        confidence: 0.3,
+      };
+    }
+  } catch (error) {
+    console.error("Error in document classification:", error);
+    return {
+      success: false,
+      documentType: "unknown",
+      structuredData: {},
+      confidence: 0,
+    };
+  }
+};
+
+/**
+ * Create document embeddings for semantic search
+ *
+ * This function chunks the processed text and creates vector embeddings
+ * for each chunk to enable semantic search functionality.
+ *
+ * @param documentId - The ID of the document
+ * @param processedText - The processed text to embed
+ * @param structuredData - Optional structured data to improve chunking
+ * @returns Promise that resolves when embeddings are created
+ */
+const createDocumentEmbeddings = async (
+  documentId: string,
+  processedText: string,
+  structuredData: any | null
+): Promise<boolean> => {
+  try {
+    logProcessingStep(
+      documentId,
+      "EMBEDDINGS",
+      "Creating document embeddings for search",
+      { textLength: processedText.length }
+    );
+
+    if (!processedText || processedText.trim().length === 0) {
+      throw new Error("No text provided for embeddings");
+    }
+
+    // First, delete any existing embeddings for this document
+    console.log(`Deleting existing embeddings for document: ${documentId}`);
+    await supabase
+      .from("document_embeddings")
+      .delete()
+      .eq("document_id", documentId);
+
+    // Get document metadata to attach to chunks
+    const { data: documentData, error: docError } = await supabase
+      .from("documents")
+      .select("document_type, title, file_type")
+      .eq("id", documentId)
+      .single();
+
+    if (docError) {
+      console.warn(
+        "Could not retrieve document metadata for embeddings:",
+        docError
+      );
+      // Continue anyway with limited metadata
+    }
+
+    // Determine chunking strategy based on document type and structured data
+    const documentType = documentData?.document_type || "unknown";
+    console.log(`Using document type for chunking strategy: ${documentType}`);
+
+    // Prepare texts for chunking with smarter segmentation based on document type
+    let textToChunk = processedText;
+    const chunks: string[] = [];
+
+    // If we have structured data, we can create more meaningful chunks
+    if (structuredData && typeof structuredData === "object") {
+      console.log("Using structured data to create semantic chunks");
+
+      // Create a chunk from each major section in the structured data
+      Object.entries(structuredData).forEach(([key, value]) => {
+        if (value && typeof value === "string" && value.length > 50) {
+          // Only create chunks from meaningful content
+          chunks.push(`${key.toUpperCase()}: ${value}`);
+        } else if (value && typeof value === "object") {
+          // For nested objects, flatten them into a single chunk
+          const nestedContent = Object.entries(value as object)
+            .map(([subKey, subValue]) => `${subKey}: ${subValue}`)
+            .join("\n");
+
+          if (nestedContent.length > 50) {
+            chunks.push(`${key.toUpperCase()}:\n${nestedContent}`);
+          }
+        }
+      });
+
+      // If we extracted meaningful chunks from structured data, use those
+      // Otherwise, fall back to standard text chunking
+      if (chunks.length < 2) {
+        console.log(
+          "Insufficient chunks from structured data, falling back to text chunking"
+        );
+        chunks.length = 0; // Clear the array to use standard chunking
+      }
+    }
+
+    // If we don't have enough chunks from structured data, use standard text chunking
+    if (chunks.length === 0) {
+      console.log("Using standard text chunking");
+      chunks.push(...chunkText(textToChunk, 1000, 200));
+    }
+
+    console.log(`Created ${chunks.length} chunks for embedding`);
+
+    // Assign importance levels to chunks
+    const chunksWithImportance = chunks.map((chunk, index) => {
+      // Simple heuristic: first chunks are often more important
+      let importance = "medium";
+      if (index === 0) importance = "high";
+      else if (index === 1) importance = "high";
+      else if (index >= chunks.length - 2) importance = "low";
+
+      // If chunk contains certain keywords, elevate importance
+      const lowerChunk = chunk.toLowerCase();
+      if (
+        lowerChunk.includes("total") ||
+        lowerChunk.includes("summary") ||
+        lowerChunk.includes("conclusion") ||
+        lowerChunk.includes("agreement") ||
+        lowerChunk.includes("important")
+      ) {
+        importance = "high";
+      }
+
+      return { chunk, importance };
+    });
+
+    // Process embeddings in batches to avoid rate limits
+    const BATCH_SIZE = 5;
+    const batches = [];
+
+    for (let i = 0; i < chunksWithImportance.length; i += BATCH_SIZE) {
+      batches.push(chunksWithImportance.slice(i, i + BATCH_SIZE));
+    }
+
+    console.log(`Processing ${batches.length} embedding batches`);
+
+    let totalEmbeddings = 0;
+
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
+      console.log(`Processing batch ${batchIndex + 1}/${batches.length}`);
+
+      const embeddingPromises = batch.map(
+        async ({ chunk, importance }, chunkIndex) => {
+          const absoluteIndex = batchIndex * BATCH_SIZE + chunkIndex;
+
+          try {
+            // Generate embedding for this chunk
+            const embedding = await createEmbedding(chunk);
+
+            // Calculate approximate token count (rough estimate)
+            const tokensCount = Math.ceil(chunk.length / 4);
+
+            // Create metadata object
+            const chunkMetadata = {
+              importance,
+              document_type: documentType,
+              title: documentData?.title || "",
+              chunk_index: absoluteIndex,
+              total_chunks: chunksWithImportance.length,
+            };
+
+            // Convert embedding to PostgreSQL vector format
+            const vectorString = `[${embedding.join(",")}]`;
+
+            // Create embedding record
+            const embeddingInsert: DocumentEmbeddingInsert = {
+              document_id: documentId,
+              content_chunk: chunk,
+              chunk_index: absoluteIndex,
+              chunk_type: "text",
+              chunk_metadata: chunkMetadata,
+              tokens_count: tokensCount,
+              embedding: vectorString,
+            };
+
+            return embeddingInsert;
+          } catch (embeddingError) {
+            console.error(
+              `Error creating embedding for chunk ${absoluteIndex}:`,
+              embeddingError
+            );
+            return null;
+          }
+        }
+      );
+
+      // Wait for all embeddings in this batch
+      const embeddingResults = await Promise.all(embeddingPromises);
+      const validEmbeddings = embeddingResults.filter(
+        (result) => result !== null
+      ) as DocumentEmbeddingInsert[];
+
+      if (validEmbeddings.length > 0) {
+        // Insert embeddings into database
+        const { error: insertError } = await supabase
+          .from("document_embeddings")
+          .insert(validEmbeddings);
+
+        if (insertError) {
+          console.error("Error inserting embeddings batch:", insertError);
+        } else {
+          totalEmbeddings += validEmbeddings.length;
+          console.log(
+            `Successfully inserted ${validEmbeddings.length} embeddings from batch ${batchIndex + 1}`
+          );
+        }
+      }
+
+      // Add a small delay between batches to avoid rate limits
+      if (batchIndex < batches.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+
+    logProcessingStep(
+      documentId,
+      "EMBEDDINGS COMPLETE",
+      `Successfully created ${totalEmbeddings} embeddings for search`,
+      {
+        totalChunks: chunks.length,
+        successfulEmbeddings: totalEmbeddings,
+      }
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Error creating document embeddings:", error);
+    logProcessingStep(
+      documentId,
+      "EMBEDDINGS ERROR",
+      "Failed to create embeddings",
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+    return false;
+  }
 };
