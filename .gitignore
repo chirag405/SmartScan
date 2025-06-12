@@ -2,14 +2,14 @@
 
 # dependencies
 node_modules/
-
+app.json
 # Expo
 .expo/
 dist/
 web-build/
 expo-env.d.ts
 smartscan-461808-0b31acd7972d
-
+app.json
 
 
 # Native

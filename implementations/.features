@@ -131,6 +131,7 @@ OPENAI_API_KEY=your_openai_key
 
 3. **Text Chunking**:
 
+   - langhchain chunking and embedding
    - Split structured data into meaningful chunks
    - Create chunks based on document sections or key-value pairs
    - Ensure chunks retain context and are semantically meaningful

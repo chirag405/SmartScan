@@ -1,4 +1,6 @@
+import { OpenAIEmbeddings } from "@langchain/openai";
 import { Buffer } from "buffer";
+import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import OpenAI from "openai";
 import { config } from "../lib/config";
 import { supabase } from "../lib/supabaseClient";
@@ -62,52 +64,80 @@ const openai = new OpenAI({
   dangerouslyAllowBrowser: true, // Required for React Native
 });
 
-// Helper function to chunk text
-const chunkText = (
+// Helper function to chunk text using LangChain
+const chunkText = async (
   text: string,
   maxTokens: number = 1000,
   overlap: number = 200
-): string[] => {
-  const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0);
-  const chunks: string[] = [];
-  let currentChunk = "";
+): Promise<string[]> => {
+  try {
+    console.log(
+      "Using LangChain RecursiveCharacterTextSplitter for chunking with increased overlap"
+    );
 
-  // Enhanced algorithm that ensures proper sentence boundaries and overlap
-  for (const sentence of sentences) {
-    const trimmedSentence = sentence.trim() + "."; // Add back the sentence ending
-    const potentialChunk =
-      currentChunk + (currentChunk ? " " : "") + trimmedSentence;
+    // Use LangChain's RecursiveCharacterTextSplitter with increased overlap
+    const splitter = new RecursiveCharacterTextSplitter({
+      chunkSize: maxTokens * 4, // Approximate character count (4 chars ≈ 1 token)
+      chunkOverlap: overlap * 4, // Increased overlap in characters
+      separators: ["\n\n", "\n", ". ", "! ", "? ", ";", ":", " ", ""], // Order matters
+    });
 
-    // Rough estimate: 1 token ≈ 4 characters
-    const potentialChunkTokens = Math.ceil(potentialChunk.length / 4);
+    const chunks = await splitter.splitText(text);
 
-    if (potentialChunkTokens > maxTokens && currentChunk.length > 0) {
-      // Current chunk is full, add it to chunks
-      chunks.push(currentChunk.trim());
+    console.log(
+      `Created ${chunks.length} chunks with LangChain with increased overlap`
+    );
+    return chunks;
+  } catch (error) {
+    console.error("Error in LangChain text chunking:", error);
 
-      // Create overlap by keeping some of the last content
-      const words = currentChunk.split(" ");
-      const overlapWordCount = Math.min(Math.ceil(overlap / 4), words.length);
-      const overlapText = words.slice(-overlapWordCount).join(" ");
+    // Fallback to enhanced manual chunking with improved overlap
+    console.log(
+      "Falling back to enhanced manual chunking method with increased overlap"
+    );
+    const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+    const chunks: string[] = [];
+    let currentChunk = "";
 
-      // Start new chunk with overlap text + current sentence
-      currentChunk =
-        (overlapText.length > 0 ? overlapText + " " : "") + trimmedSentence;
-    } else {
-      currentChunk = potentialChunk;
+    // Use a larger overlap for better context preservation
+    const enhancedOverlap = Math.max(overlap, Math.floor(maxTokens * 0.3)); // 30% overlap minimum
+
+    for (const sentence of sentences) {
+      const trimmedSentence = sentence.trim() + ".";
+      const potentialChunk =
+        currentChunk + (currentChunk ? " " : "") + trimmedSentence;
+      const potentialChunkTokens = Math.ceil(potentialChunk.length / 4);
+
+      if (potentialChunkTokens > maxTokens && currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+
+        // Enhanced overlap mechanism
+        const words = currentChunk.split(" ");
+        const overlapWordCount = Math.min(
+          Math.ceil(enhancedOverlap / 4),
+          words.length
+        );
+        const overlapText = words.slice(-overlapWordCount).join(" ");
+
+        // Start new chunk with the overlap from the previous chunk
+        currentChunk =
+          (overlapText.length > 0 ? overlapText + " " : "") + trimmedSentence;
+      } else {
+        currentChunk = potentialChunk;
+      }
     }
-  }
 
-  // Add the last chunk if not empty
-  if (currentChunk.trim().length > 0) {
-    chunks.push(currentChunk.trim());
-  }
+    // Don't forget the last chunk
+    if (currentChunk.trim().length > 0) {
+      chunks.push(currentChunk.trim());
+    }
 
-  console.log(`Created ${chunks.length} chunks with ${overlap} token overlap`);
-  return chunks;
+    console.log(`Created ${chunks.length} chunks with enhanced manual overlap`);
+    return chunks;
+  }
 };
 
-// Helper function to create embeddings with improved error handling
+// Helper function to create embeddings using LangChain
 const createEmbedding = async (text: string): Promise<number[]> => {
   try {
     if (!config.openai.apiKey) {
@@ -118,30 +148,62 @@ const createEmbedding = async (text: string): Promise<number[]> => {
       throw new Error("No text provided for embedding");
     }
 
-    console.log("Creating embedding for text length:", text.length);
+    console.log(
+      "Creating embedding with LangChain for text length:",
+      text.length
+    );
 
-    const response = await openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: text.trim(),
+    // Create LangChain OpenAIEmbeddings instance with the configured API key
+    const embeddings = new OpenAIEmbeddings({
+      openAIApiKey: config.openai.apiKey,
+      modelName: "text-embedding-3-small",
+      dimensions: 1536, // Specify dimensions for the embedding model
     });
 
-    if (!response.data || response.data.length === 0) {
-      throw new Error("No embedding data received from OpenAI");
-    }
+    // Generate embedding using LangChain
+    const embedding = await embeddings.embedQuery(text.trim());
 
-    const embedding = response.data[0].embedding;
     if (!embedding || embedding.length === 0) {
-      throw new Error("Invalid embedding received from OpenAI");
+      throw new Error(
+        "Invalid embedding received from LangChain OpenAIEmbeddings"
+      );
     }
 
     console.log(
-      "Embedding created successfully with dimension:",
+      "LangChain embedding created successfully with dimension:",
       embedding.length
     );
     return embedding;
   } catch (error) {
-    console.error("Error creating embedding:", error);
-    throw error;
+    console.error("Error creating embedding with LangChain:", error);
+
+    // If LangChain fails, fall back to direct OpenAI API call
+    try {
+      console.log("Falling back to direct OpenAI API call for embedding");
+
+      const response = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: text.trim(),
+      });
+
+      if (!response.data || response.data.length === 0) {
+        throw new Error("No embedding data received from OpenAI fallback");
+      }
+
+      const embedding = response.data[0].embedding;
+      if (!embedding || embedding.length === 0) {
+        throw new Error("Invalid embedding received from OpenAI fallback");
+      }
+
+      console.log(
+        "Fallback embedding created successfully with dimension:",
+        embedding.length
+      );
+      return embedding;
+    } catch (fallbackError) {
+      console.error("Error in fallback embedding:", fallbackError);
+      throw fallbackError;
+    }
   }
 };
 
@@ -605,9 +667,8 @@ const extractTextFromDocument = async (
                     if (classificationResult.success) {
                       updateData.document_type =
                         classificationResult.documentType;
-                      updateData.processed_text = JSON.stringify(
-                        classificationResult.structuredData
-                      );
+                      // Store raw text instead of JSON
+                      updateData.processed_text = processedResult.processedText;
 
                       // Only keep essential metadata
                       if (classificationResult.structuredData) {
@@ -691,6 +752,7 @@ const extractTextFromDocument = async (
                       .update({
                         ocr_status: "fallback",
                         processed_at: new Date().toISOString(),
+                        processed_text: extractedText, // Store the raw extracted text instead
                       })
                       .eq("id", documentId);
 
@@ -726,6 +788,7 @@ const extractTextFromDocument = async (
                       ocr_status: "error",
                       processed_at: new Date().toISOString(),
                       processed_text:
+                        extractedText ||
                         "Error during document processing. Please try again.",
                     })
                     .eq("id", documentId);
@@ -1009,93 +1072,23 @@ export const processTextWithGPTStructured = async (
     console.log(`- OpenAI Client initialized: ${!!openai}`);
     console.log(`- API Key available: ${!!finalApiKey}`);
 
-    // Prepare prompt for GPT
+    // Prepare prompt for GPT with simpler output format
     const prompt = `
-You are a document analysis expert specializing in extracting document-specific information while filtering out generic content. Your task is to intelligently analyze ANY type of document and extract ONLY the unique, valuable information specific to this document.
+Analyze this document and extract the key information in a simple, readable format.
 
 Document text:
-${rawText.slice(0, 15000)} // Limit to prevent token overflow
+${rawText.slice(0, 15000)}
 
-INTELLIGENT EXTRACTION APPROACH:
+Focus only on the important and specific information from this document. Ignore any generic content, disclaimers, or standard text that would appear in similar documents.
 
-STEP 1 - DOCUMENT UNDERSTANDING:
-First, identify what type of document this is based on its content, structure, and purpose.
+Organize your response as a simple, continuous narrative that flows naturally. Use everyday language without complex formatting or technical jargon. Do not include warnings, cautions, or general disclaimers.
 
-STEP 2 - SMART FIELD IDENTIFICATION:
-Automatically identify the most important data fields present in this specific document by analyzing:
-- Personal identifiers (names, IDs, numbers)
-- Dates and time-sensitive information
-- Monetary values and quantities
-- Addresses and contact details
-- Reference numbers and codes
-- Specific measurements or technical data
-- Unique terms, conditions, or specifications
-- Relationships between entities mentioned
+First, briefly identify what type of document this is. Then, summarize the core information and key details that matter most. Include any relevant names, dates, numbers, and specific details unique to this document.
 
-STEP 3 - GENERIC CONTENT FILTERING:
-Intelligently exclude ALL generic content that would appear on similar documents:
-- Standard disclaimers and legal boilerplate
-- Generic warnings and precautionary statements
-- Common instructions or usage guidelines
-- Standard contact information for organizations
-- Typical headers, footers, and watermarks
-- Security feature descriptions
-- General terms and conditions
-- Processing notices that appear on all similar documents
-- Standard format explanations
+Write your response as if you're explaining the document to someone in a casual conversation. Your output should be plain text only - DO NOT include any JSON or structured format in your response.
 
-DYNAMIC RESPONSE FORMAT:
-Based on the document analysis, create a logical structure that best represents the important information:
-
-Document Type: [Identify the specific type/purpose of this document]
-
-Core Information:
-[Extract and present the most essential document-specific information in a clear, structured paragraph. Focus on the primary purpose and key data points that make this document unique and valuable.]
-
-Detailed Specifications:
-[Organize additional important information logically based on what's actually present in the document. Group related data together in a way that makes sense for this specific document type.]
-
-Reference & Identification Data:
-[List all unique identifiers, codes, numbers, and reference data with their exact values and context.]
-
-Additional Context:
-[Include any other document-specific information that provides important context or details unique to this particular document.]
-
-ADAPTIVE FORMATTING RULES:
-- Automatically adjust the information groupings based on document content
-- Use clear, descriptive section headers that match the document's nature
-- Present information in logical flow relevant to the document's purpose
-- Preserve exact formatting of numbers, dates, codes, and technical specifications
-- Use plain text without markdown or special formatting
-- Group related information together naturally
-- Be comprehensive about document-specific details while excluding generic content
-
-INTELLIGENT GUIDELINES:
-- Analyze the document's purpose and structure to determine the most logical way to present information
-- Focus on extracting what makes THIS specific document unique and valuable
-- Automatically adapt the response structure to best serve the document's content
-- Preserve all critical data exactly as it appears in the original
-- Filter out repetitive or standard content intelligently
-- Present information in a way that would be most useful for someone needing to reference this specific document
-- Do not force information into predefined categories - let the document's content determine the structure
-
-CRITICAL SUCCESS FACTORS:
-- ONLY include information that is specific to THIS document
-- Completely exclude generic text that appears on all similar documents
-- Automatically organize information in the most logical way for this document type
-- Be thorough in extracting unique, valuable information
-- Present data in a clear, accessible format without unnecessary complexity
+IMPORTANT: Do not use JSON format in your response. Use only plain text output.
 `;
-
-    // Process with OpenAI
-    console.log(`\n🤖 STARTING OPENAI PROCESSING for document: ${documentId}`);
-    console.log(`📊 Prompt length: ${prompt.length} characters`);
-    console.log(`🔧 OpenAI API Key configured: ${!!config.openai.apiKey}`);
-    console.log(
-      `🔧 Environment API Key available: ${!!process.env.EXPO_PUBLIC_OPENAI_API_KEY}`
-    );
-    console.log(`🔧 Final API Key in use: ${!!finalApiKey}`);
-    console.log(`📝 Raw text length: ${rawText.length} characters`);
 
     // Time this section to detect hanging
     const preApiCallTime = Date.now();
@@ -2120,15 +2113,14 @@ const classifyDocumentAndExtractData = async (
       return defaultResult;
     }
 
-    // Prepare the prompt for GPT to classify the document and extract data
+    // Prepare the prompt for GPT to classify the document and extract data with simplified format
     const prompt = `
-You are an expert document analyzer with the task of identifying document type and extracting structured data.
+Analyze this document to identify its type and key information.
 
 DOCUMENT TEXT:
-${processedText.substring(0, 10000)} // Limit text to prevent token overflow
+${processedText.substring(0, 10000)}
 
-TASK 1 - DOCUMENT CLASSIFICATION:
-Analyze the text and determine the most specific document type from these categories:
+First, determine what type of document this is from these categories:
 - Invoice/Receipt
 - Resume/CV
 - Contract/Agreement
@@ -2142,25 +2134,19 @@ Analyze the text and determine the most specific document type from these catego
 - Certificate
 - Other (please specify)
 
-TASK 2 - STRUCTURED DATA EXTRACTION:
-Based on the identified document type, extract the most relevant structured data as JSON.
-Include only data that is actually present in the document.
+Then, extract the most relevant data from the document that would be useful for searching and organizing it.
 
 OUTPUT FORMAT:
-Respond ONLY with a JSON object that has these fields:
-{
-  "documentType": "the specific document type",
-  "confidence": 0.X, // your confidence in the classification from 0.1 to 0.9
-  "structuredData": {
-    // Document-specific fields based on the document type
-    // For example, for an invoice:
-    "invoiceNumber": "...",
-    "date": "...",
-    "totalAmount": "...",
-    "vendor": "...",
-    // etc.
-  }
-}
+Respond with plain text in the following format:
+
+Document Type: [the document type]
+Confidence: [0.X]
+Structured Data:
+[Key]: [Value]
+[Key]: [Value]
+...
+
+Do not use JSON format for your response. Use plain text with key-value pairs.
 `;
 
     console.log("Calling OpenAI for document classification...");
@@ -2186,40 +2172,67 @@ Respond ONLY with a JSON object that has these fields:
     );
 
     try {
-      // Parse the JSON response
-      // Extract just the JSON part if there's additional text
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      const jsonString = jsonMatch ? jsonMatch[0] : responseText;
+      // Parse the plain text response
+      const lines = responseText
+        .split("\n")
+        .filter((line) => line.trim().length > 0);
+      let documentType = "unknown";
+      let confidence = 0.5;
+      const structuredData: Record<string, any> = {};
 
-      const classificationData = JSON.parse(jsonString);
+      let inStructuredDataSection = false;
+
+      for (const line of lines) {
+        if (line.toLowerCase().startsWith("document type:")) {
+          documentType = line.substring("document type:".length).trim();
+        } else if (line.toLowerCase().startsWith("confidence:")) {
+          const confidenceValue = parseFloat(
+            line.substring("confidence:".length).trim()
+          );
+          if (!isNaN(confidenceValue)) {
+            confidence = confidenceValue;
+          }
+        } else if (line.toLowerCase() === "structured data:") {
+          inStructuredDataSection = true;
+        } else if (inStructuredDataSection) {
+          // Parse key-value pairs
+          const colonIndex = line.indexOf(":");
+          if (colonIndex > 0) {
+            const key = line.substring(0, colonIndex).trim();
+            const value = line.substring(colonIndex + 1).trim();
+            structuredData[key] = value;
+          }
+        }
+      }
 
       logProcessingStep(
         documentId,
         "CLASSIFICATION COMPLETE",
-        `Document classified as: ${classificationData.documentType}`,
-        { confidence: classificationData.confidence }
+        `Document classified as: ${documentType}`,
+        { confidence: confidence }
       );
 
       return {
         success: true,
-        documentType: classificationData.documentType || "unknown",
-        structuredData: classificationData.structuredData || {},
-        confidence: classificationData.confidence || 0.5,
+        documentType: documentType || "unknown",
+        structuredData: structuredData || {},
+        confidence: confidence || 0.5,
       };
     } catch (parseError) {
       console.error("Error parsing classification response:", parseError);
       console.log("Response that failed to parse:", responseText);
 
-      // Try to extract document type from text if JSON parsing failed
-      const typeMatch = responseText.match(
-        /documentType["']?\s*:\s*["']([^"']+)["']/i
-      );
-      const documentType = typeMatch ? typeMatch[1] : "unknown";
+      // Try to extract document type from text if parsing failed
+      const typeMatch = responseText.match(/document type:?\s*([a-z0-9\s/]+)/i);
+      const documentType = typeMatch ? typeMatch[1].trim() : "unknown";
 
+      // Use the text as structured data
       return {
         success: false,
         documentType,
-        structuredData: { rawText: processedText.substring(0, 500) + "..." },
+        structuredData: {
+          summary: responseText || processedText.substring(0, 500) + "...",
+        },
         confidence: 0.3,
       };
     }
@@ -2290,43 +2303,29 @@ const createDocumentEmbeddings = async (
 
     // Prepare texts for chunking with smarter segmentation based on document type
     let textToChunk = processedText;
-    const chunks: string[] = [];
+    let chunks: string[] = [];
 
-    // If we have structured data, we can create more meaningful chunks
-    if (structuredData && typeof structuredData === "object") {
-      console.log("Using structured data to create semantic chunks");
+    // Prioritize chunking the full text with overlap
+    console.log("Using enhanced text chunking with overlap");
+    try {
+      // Use a higher overlap ratio for better context preservation
+      const maxTokens = 1000;
+      const overlap = 300; // Increased overlap for better context preservation
 
-      // Create a chunk from each major section in the structured data
-      Object.entries(structuredData).forEach(([key, value]) => {
-        if (value && typeof value === "string" && value.length > 50) {
-          // Only create chunks from meaningful content
-          chunks.push(`${key.toUpperCase()}: ${value}`);
-        } else if (value && typeof value === "object") {
-          // For nested objects, flatten them into a single chunk
-          const nestedContent = Object.entries(value as object)
-            .map(([subKey, subValue]) => `${subKey}: ${subValue}`)
-            .join("\n");
-
-          if (nestedContent.length > 50) {
-            chunks.push(`${key.toUpperCase()}:\n${nestedContent}`);
-          }
-        }
-      });
-
-      // If we extracted meaningful chunks from structured data, use those
-      // Otherwise, fall back to standard text chunking
-      if (chunks.length < 2) {
-        console.log(
-          "Insufficient chunks from structured data, falling back to text chunking"
-        );
-        chunks.length = 0; // Clear the array to use standard chunking
-      }
-    }
-
-    // If we don't have enough chunks from structured data, use standard text chunking
-    if (chunks.length === 0) {
-      console.log("Using standard text chunking");
-      chunks.push(...chunkText(textToChunk, 1000, 200));
+      // Use await to handle the async function properly
+      chunks = await chunkText(textToChunk, maxTokens, overlap);
+      console.log(
+        `Successfully created ${chunks.length} overlapping chunks from text`
+      );
+    } catch (chunkingError) {
+      console.error("Error during text chunking:", chunkingError);
+      // If chunking fails, use a simple fallback - split by paragraphs
+      chunks = textToChunk
+        .split(/\n\s*\n/)
+        .filter((chunk) => chunk.trim().length > 0);
+      console.log(
+        `Created ${chunks.length} simple paragraph chunks as fallback`
+      );
     }
 
     console.log(`Created ${chunks.length} chunks for embedding`);
