@@ -1,5 +1,4 @@
 import { OpenAIEmbeddings } from "@langchain/openai";
-import { Buffer } from "buffer";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import OpenAI from "openai";
 import { config } from "../lib/config";
@@ -32,32 +31,14 @@ export interface DocumentStats {
   storageUsedMB: number;
 }
 
-// Initialize OpenAI client for embeddings
-console.log(`📋 Creating OpenAI client with API key from config...`);
-console.log(
-  `🔧 API Key status: ${config.openai.apiKey ? "Present" : "Missing"}`
-);
-console.log(
-  `🔧 API Key from config: ${config.openai.apiKey ? config.openai.apiKey.substring(0, 8) + "..." : "NONE"}`
-);
-
 // Check if we have an API key directly from environment (fallback)
 const envApiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
-console.log(
-  `🔧 Environment API Key: ${envApiKey ? envApiKey.substring(0, 8) + "..." : "NONE"}`
-);
 
 // Use environment variable or config for API key
 const hardcodedApiKey = process.env.OPENAI_API_KEY || "";
-console.log(
-  `🔧 Using API Key from environment: ${hardcodedApiKey ? hardcodedApiKey.substring(0, 8) + "..." : "Not found"}`
-);
 
 // Use the first available key
 const finalApiKey = config.openai.apiKey || envApiKey || hardcodedApiKey;
-console.log(
-  `🔧 Final API Key: ${finalApiKey.substring(0, 8)}... (length: ${finalApiKey.length})`
-);
 
 const openai = new OpenAI({
   apiKey: finalApiKey,
@@ -67,7 +48,7 @@ const openai = new OpenAI({
 // Helper function to chunk text using LangChain
 const chunkText = async (
   text: string,
-  maxTokens: number = 1000,
+  maxTokens: number = 500, // Smaller default chunk size (was 1000)
   overlap: number = 200
 ): Promise<string[]> => {
   try {
@@ -82,12 +63,55 @@ const chunkText = async (
       separators: ["\n\n", "\n", ". ", "! ", "? ", ";", ":", " ", ""], // Order matters
     });
 
-    const chunks = await splitter.splitText(text);
+    const langChainChunks = await splitter.splitText(text);
+
+    // Verify chunks aren't too large
+    const maxChunkLength = maxTokens * 5; // A bit larger than expected to allow some flexibility
+    const finalChunks: string[] = [];
+
+    // Process any chunks that are still too large
+    for (const chunk of langChainChunks) {
+      if (chunk.length <= maxChunkLength) {
+        finalChunks.push(chunk);
+      } else {
+        // For large chunks, split again with higher overlap
+        const subSplitter = new RecursiveCharacterTextSplitter({
+          chunkSize: (maxTokens / 2) * 4, // Smaller chunk size
+          chunkOverlap: (overlap / 2) * 4, // Higher proportional overlap
+          separators: ["\n", ". ", "! ", "? ", ";", ":", " ", ""],
+        });
+
+        try {
+          const subChunks = await subSplitter.splitText(chunk);
+          finalChunks.push(...subChunks);
+        } catch (subError) {
+          // If subsplitting fails, use character-based chunking as fallback
+          console.warn(
+            "SubSplitter failed, using character chunking",
+            subError
+          );
+
+          // Manual character-based chunking with overlap
+          const subChunkSize = Math.floor(maxTokens * 3); // ~75% of max tokens
+          const subOverlap = Math.floor(overlap * 2); // Double the overlap
+
+          for (let i = 0; i < chunk.length; i += subChunkSize - subOverlap) {
+            const subChunk = chunk.substring(
+              i,
+              Math.min(i + subChunkSize, chunk.length)
+            );
+            if (subChunk.trim().length > 0) {
+              finalChunks.push(subChunk);
+            }
+          }
+        }
+      }
+    }
 
     console.log(
-      `Created ${chunks.length} chunks with LangChain with increased overlap`
+      `Created ${finalChunks.length} chunks with LangChain with increased overlap`
     );
-    return chunks;
+    return finalChunks;
   } catch (error) {
     console.error("Error in LangChain text chunking:", error);
 
@@ -95,45 +119,89 @@ const chunkText = async (
     console.log(
       "Falling back to enhanced manual chunking method with increased overlap"
     );
+
+    // Try paragraph-based chunking first
+    const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+
+    if (paragraphs.length > 3) {
+      console.log(
+        `Using ${paragraphs.length} paragraphs as basis for chunking`
+      );
+      const chunks: string[] = [];
+      const maxParagraphLength = maxTokens * 4; // Approximate character count
+      const overlapChars = overlap * 4;
+
+      for (const paragraph of paragraphs) {
+        if (paragraph.length <= maxParagraphLength) {
+          chunks.push(paragraph);
+        } else {
+          // Split long paragraphs with overlap
+          let startIdx = 0;
+          while (startIdx < paragraph.length) {
+            const endIdx = Math.min(
+              startIdx + maxParagraphLength,
+              paragraph.length
+            );
+            chunks.push(paragraph.substring(startIdx, endIdx));
+            startIdx += maxParagraphLength - overlapChars;
+          }
+        }
+      }
+
+      console.log(
+        `Created ${chunks.length} paragraph-based chunks with overlap`
+      );
+      return chunks;
+    }
+
+    // If not enough paragraphs, use sentence-based chunking
     const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0);
     const chunks: string[] = [];
-    let currentChunk = "";
 
-    // Use a larger overlap for better context preservation
-    const enhancedOverlap = Math.max(overlap, Math.floor(maxTokens * 0.3)); // 30% overlap minimum
+    if (sentences.length > 0) {
+      // Enhanced overlap mechanism - sliding window of sentences
+      const sentencesPerChunk = Math.max(3, Math.floor(maxTokens / 100)); // Rough estimate of sentences per chunk
+      const overlapSentences = Math.max(1, Math.floor(sentencesPerChunk * 0.4)); // 40% overlap
 
-    for (const sentence of sentences) {
-      const trimmedSentence = sentence.trim() + ".";
-      const potentialChunk =
-        currentChunk + (currentChunk ? " " : "") + trimmedSentence;
-      const potentialChunkTokens = Math.ceil(potentialChunk.length / 4);
+      for (
+        let i = 0;
+        i < sentences.length;
+        i += sentencesPerChunk - overlapSentences
+      ) {
+        const endIdx = Math.min(i + sentencesPerChunk, sentences.length);
+        const chunkSentences = sentences.slice(i, endIdx);
 
-      if (potentialChunkTokens > maxTokens && currentChunk.length > 0) {
-        chunks.push(currentChunk.trim());
+        if (chunkSentences.length > 0) {
+          const chunk = chunkSentences.join(". ") + ".";
+          chunks.push(chunk.trim());
+        }
 
-        // Enhanced overlap mechanism
-        const words = currentChunk.split(" ");
-        const overlapWordCount = Math.min(
-          Math.ceil(enhancedOverlap / 4),
-          words.length
-        );
-        const overlapText = words.slice(-overlapWordCount).join(" ");
+        // Break if we've processed all sentences
+        if (endIdx >= sentences.length) break;
+      }
 
-        // Start new chunk with the overlap from the previous chunk
-        currentChunk =
-          (overlapText.length > 0 ? overlapText + " " : "") + trimmedSentence;
-      } else {
-        currentChunk = potentialChunk;
+      console.log(
+        `Created ${chunks.length} sentence-based chunks with enhanced overlap`
+      );
+      return chunks;
+    }
+
+    // Last resort: character-based chunking
+    const charChunks: string[] = [];
+    const chunkSize = maxTokens * 4; // Chars per chunk
+    const charOverlap = overlap * 4; // Chars of overlap
+
+    for (let i = 0; i < text.length; i += chunkSize - charOverlap) {
+      const chunk = text.substring(i, Math.min(i + chunkSize, text.length));
+      if (chunk.trim().length > 0) {
+        charChunks.push(chunk);
       }
     }
 
-    // Don't forget the last chunk
-    if (currentChunk.trim().length > 0) {
-      chunks.push(currentChunk.trim());
-    }
-
-    console.log(`Created ${chunks.length} chunks with enhanced manual overlap`);
-    return chunks;
+    console.log(
+      `Created ${charChunks.length} character-based chunks with overlap`
+    );
+    return charChunks;
   }
 };
 
@@ -205,117 +273,6 @@ const createEmbedding = async (text: string): Promise<number[]> => {
       throw fallbackError;
     }
   }
-};
-
-/**
- * Create a minimal valid PDF file as a fallback
- *
- * @param size - Optional target size for the PDF (defaults to 1024 bytes)
- * @returns Buffer containing a minimal valid PDF
- */
-const createMinimalPdf = (size = 1024): Buffer => {
-  // Create a minimal valid PDF structure
-  const header = "%PDF-1.4\n";
-  const body =
-    "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n" +
-    "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
-    "3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>\n" +
-    "4 0 obj<</Length 5 0 R>>\nstream\n";
-
-  // Calculate padding to reach the target size
-  const footer =
-    "\nendstream\nendobj\n" +
-    "5 0 obj\n100\nendobj\n" +
-    "xref\n" +
-    "0 6\n" +
-    "0000000000 65535 f\n" +
-    "0000000010 00000 n\n" +
-    "0000000053 00000 n\n" +
-    "0000000102 00000 n\n" +
-    "0000000172 00000 n\n" +
-    "0000000300 00000 n\n" +
-    "trailer<</Size 6/Root 1 0 R>>\n" +
-    "startxref\n" +
-    "320\n" +
-    "%%EOF";
-
-  // Calculate how much padding we need
-  const headerAndFooterSize = Buffer.from(
-    header + body + footer,
-    "utf8"
-  ).length;
-  const paddingSize = Math.max(0, size - headerAndFooterSize);
-
-  // Create padding content (repeating pattern for better compression)
-  let padding = "";
-  for (let i = 0; i < paddingSize; i++) {
-    padding += String.fromCharCode(65 + (i % 26));
-  }
-
-  // Create the complete PDF content
-  const pdfContent = header + body + padding + footer;
-  return Buffer.from(pdfContent, "utf8");
-};
-
-/**
- * Extract PDF content from a React Native blob as a fallback
- *
- * @param rnBlob - The React Native blob object
- * @returns Buffer containing the extracted or synthesized PDF
- */
-const extractPdfFromReactNativeBlob = (rnBlob: any): Buffer => {
-  console.log("Extracting PDF from React Native blob...");
-  console.log("Blob properties:", Object.keys(rnBlob).join(", "));
-
-  // Check if we have the expected structure from error logs
-  if (
-    rnBlob &&
-    typeof rnBlob === "object" &&
-    "size" in rnBlob &&
-    "offset" in rnBlob &&
-    "blobId" in rnBlob &&
-    "type" in rnBlob &&
-    "name" in rnBlob
-  ) {
-    console.log(
-      `Found RN blob with size: ${rnBlob.size}, type: ${rnBlob.type}, name: ${rnBlob.name}`
-    );
-
-    // Try to get data from __collector if available
-    if ("__collector" in rnBlob && rnBlob.__collector) {
-      console.log(
-        "Found __collector in blob, attempting to extract binary data..."
-      );
-
-      // Different approaches for different collector types
-      if (Buffer.isBuffer(rnBlob.__collector)) {
-        console.log("__collector is a Buffer, using directly");
-        return rnBlob.__collector;
-      } else if (ArrayBuffer.isView(rnBlob.__collector)) {
-        console.log("__collector is an ArrayBuffer view, converting to Buffer");
-        return Buffer.from(rnBlob.__collector.buffer);
-      } else if (typeof rnBlob.__collector === "string") {
-        console.log("__collector is a string, trying base64 decode");
-        try {
-          return Buffer.from(rnBlob.__collector, "base64");
-        } catch (e) {
-          console.log("Base64 decode failed, using as UTF-8");
-          return Buffer.from(rnBlob.__collector, "utf8");
-        }
-      } else if (Array.isArray(rnBlob.__collector)) {
-        console.log("__collector is an array, converting to Buffer");
-        return Buffer.from(rnBlob.__collector);
-      }
-    }
-  }
-
-  // Fallback: create a minimal PDF with the blob size if available
-  const size =
-    rnBlob && typeof rnBlob === "object" && "size" in rnBlob
-      ? rnBlob.size
-      : 1024;
-  console.log(`Using fallback minimal PDF (${size} bytes)`);
-  return createMinimalPdf(size);
 };
 
 // Enhanced logging function with formatted output
@@ -404,18 +361,26 @@ const extractTextFromDocument = async (
 
     // Create request body with file_url
     const requestBody = {
-      providers: "mistral",
+      providers: ["microsoft"], // Use Microsoft OCR
       language: "en",
       file_url: fileUrl,
+      // Additional parameters for better text extraction
+      text_detection_mode: "accurate", // Use accurate mode for better results
+      preserve_layout: true, // Preserve document layout
+      extract_tables: true, // Extract tables
+      extract_figures: true, // Extract figures and diagrams
+      extract_headers: true, // Extract headers and footers
+      extract_footnotes: true, // Extract footnotes
+      extract_metadata: true, // Extract document metadata
     };
 
     console.log(`API endpoint: ${config.edenAI.ocrAsyncEndpoint}`);
-    console.log(`Using signed URL approach with Mistral provider for OCR`);
+    console.log(`Using signed URL approach with multiple providers for OCR`);
     console.log(
       `File type: ${mimeType}, method: secure signed URL from storage (expires in 1 hour)`
     );
 
-    // Call Eden AI OCR Async for PDF
+    // Call Eden AI OCR Async
     const response = await fetch(config.edenAI.ocrAsyncEndpoint, {
       method: "POST",
       headers: {
@@ -471,336 +436,200 @@ const extractTextFromDocument = async (
             if (resultData.status === "finished") {
               console.log("OCR processing completed");
 
-              // Extract text from results
-              let extractedText = "";
+              // Extract text from Microsoft results
+              let rawExtractedText = "";
               let confidence = 0.5;
               let entities: any[] = [];
 
-              // Process the OCR results
-              if (
-                resultData.results &&
-                Object.keys(resultData.results).length > 0
-              ) {
-                const providers = Object.keys(resultData.results);
-                console.log(
-                  `Available OCR results from providers: ${providers.join(", ")}`
-                );
+              // Process the Microsoft OCR results
+              if (resultData.results && resultData.results.microsoft) {
+                const microsoftResult = resultData.results.microsoft;
+                console.log("Processing Microsoft OCR results");
 
-                // Log Mistral provider structure if present
-                if (resultData.results.mistral) {
-                  const mistral = resultData.results.mistral;
-                  console.log(
-                    `Mistral provider details - final_status: ${mistral.final_status}, has raw_text: ${Boolean(mistral.raw_text)}, text length: ${mistral.raw_text ? mistral.raw_text.length : 0}`
+                // Get ALL text from Microsoft's response
+                const allTextParts: string[] = [];
+
+                if (
+                  microsoftResult.raw_text &&
+                  microsoftResult.raw_text.trim().length > 0
+                ) {
+                  console.log("Adding Microsoft's raw_text");
+                  allTextParts.push(microsoftResult.raw_text);
+                }
+
+                if (microsoftResult.data?.text) {
+                  console.log("Adding Microsoft's structured text");
+                  allTextParts.push(microsoftResult.data.text);
+                }
+
+                if (microsoftResult.data?.texts) {
+                  console.log("Adding Microsoft's text array");
+                  const textsArray = microsoftResult.data.texts
+                    .map(
+                      (textObj: any) =>
+                        textObj.text || textObj.content || textObj
+                    )
+                    .filter((text: string) => text && text.trim().length > 0);
+                  allTextParts.push(...textsArray);
+                }
+
+                // Add tables if available
+                if (microsoftResult.data?.tables) {
+                  console.log("Adding Microsoft's tables");
+                  const tablesText = microsoftResult.data.tables
+                    .map((table: any) => {
+                      if (Array.isArray(table)) {
+                        return table
+                          .map((row) =>
+                            Array.isArray(row)
+                              ? row.join("\t")
+                              : JSON.stringify(row)
+                          )
+                          .join("\n");
+                      }
+                      return JSON.stringify(table);
+                    })
+                    .join("\n\n");
+                  allTextParts.push(tablesText);
+                }
+
+                // Add metadata if available
+                if (microsoftResult.data?.metadata) {
+                  console.log("Adding Microsoft's metadata");
+                  allTextParts.push(
+                    JSON.stringify(microsoftResult.data.metadata, null, 2)
                   );
                 }
 
-                for (const provider of providers) {
-                  const providerResult = resultData.results[provider];
+                // Combine all text parts
+                rawExtractedText = allTextParts
+                  .filter((text) => text && text.trim().length > 0)
+                  .join("\n\n");
 
-                  const isSuccess =
-                    !providerResult.error && providerResult.data;
-                  if (isSuccess) {
-                    console.log(`Using OCR results from provider: ${provider}`);
+                confidence = microsoftResult.confidence || 0.8;
 
-                    // Extract text from OCR results
-                    if (providerResult.data.text) {
-                      extractedText = providerResult.data.text;
-                    } else if (providerResult.data.texts) {
-                      extractedText = providerResult.data.texts
-                        .map(
-                          (textObj: any) =>
-                            textObj.text || textObj.content || textObj
-                        )
-                        .join("\n\n");
-                    }
-
-                    // Extract entities if available
-                    if (providerResult.data.entities) {
-                      entities = providerResult.data.entities.map(
-                        (entity: any) => ({
-                          text: entity.value || entity.text,
-                          description: entity.label || entity.type,
-                          confidence: entity.confidence || 0.5,
-                        })
-                      );
-                    }
-
-                    confidence = providerResult.confidence || 0.8;
-                    break;
-                  } else {
-                    // Check if provider has raw_text even if success status is not set
-                    if (
-                      providerResult.raw_text &&
-                      providerResult.raw_text.trim().length > 0
-                    ) {
-                      console.log(
-                        `Provider ${provider} has raw_text despite status not being success`
-                      );
-                      extractedText = providerResult.raw_text;
-                      confidence = providerResult.confidence || 0.8;
-                      break;
-                    } else {
-                      console.warn(
-                        `Provider ${provider} failed:`,
-                        providerResult.status,
-                        providerResult.error
-                      );
-                    }
-                  }
+                // Extract entities if available
+                if (microsoftResult.data?.entities) {
+                  entities = microsoftResult.data.entities.map(
+                    (entity: any) => ({
+                      text: entity.value || entity.text,
+                      description: entity.label || entity.type,
+                      confidence: entity.confidence || 0.5,
+                      boundingBox: entity.boundingBox,
+                    })
+                  );
                 }
               }
 
-              // Check for raw_text directly if extractedText is empty
-              if (!extractedText || extractedText.trim().length === 0) {
-                // Try to get raw_text from any provider
-                let foundRawText = false;
-                for (const provider of Object.keys(resultData.results)) {
-                  const providerResult = resultData.results[provider];
-                  if (
-                    providerResult.raw_text &&
-                    providerResult.raw_text.trim().length > 0
-                  ) {
-                    extractedText = providerResult.raw_text;
-                    foundRawText = true;
-                    console.log(`Using raw_text from provider: ${provider}`);
-                    break;
-                  }
-                }
-
-                if (!foundRawText) {
-                  extractedText =
-                    "No text could be extracted from PDF. The document might be image-based or have security restrictions.";
-                  console.warn("No text was extracted from PDF");
-                }
-              }
-
-              if (extractedText && extractedText.trim().length > 0) {
-                console.log(
-                  `Extracted ${extractedText.length} characters of text from PDF`
-                );
-
-                try {
-                  // 1. Update document with the extracted text status
-                  logProcessingStep(
-                    documentId,
-                    "TEXT STORAGE",
-                    "Updating document status after text extraction",
-                    { textLength: extractedText.length, confidence }
-                  );
-
-                  const { error: updateError1 } = await supabase
-                    .from("documents")
-                    .update({
-                      ocr_confidence_score: confidence,
-                      ocr_status: "extracted",
-                    })
-                    .eq("id", documentId);
-
-                  // 2. Process the text with GPT to clean it up
-                  logProcessingStep(
-                    documentId,
-                    "TEXT PROCESSING",
-                    "Processing extracted text with GPT for better structure",
-                    { originalTextLength: extractedText.length }
-                  );
-
-                  console.log(
-                    `\n🔄 CALLING GPT PROCESSING for document: ${documentId}`
-                  );
-                  console.log(
-                    `📄 Text to process: ${extractedText.length} characters`
-                  );
-                  console.log(
-                    `🎯 First 500 chars: ${extractedText.substring(0, 500)}...`
-                  );
-
-                  const processedResult = await processTextWithGPTStructured(
-                    extractedText,
-                    documentId
-                  );
-
-                  console.log(
-                    `\n📋 GPT PROCESSING RESULT for document: ${documentId}`
-                  );
-                  console.log(`✅ Success: ${processedResult.success}`);
-                  console.log(
-                    `📝 Processed text length: ${processedResult.processedText?.length || 0}`
-                  );
-                  console.log(
-                    `⏱️ Processing time: ${processedResult.metadata.processingTime}ms`
-                  );
-                  console.log(`🎭 Status: ${processedResult.metadata.status}`);
-                  if (!processedResult.success) {
-                    console.log(`❌ Error: ${processedResult.metadata.error}`);
-                    console.log(
-                      `🔍 Reason: ${processedResult.metadata.reason}`
-                    );
-                  }
-
-                  if (
-                    processedResult.success &&
-                    processedResult.processedText
-                  ) {
-                    // 3. Classify document and extract structured data
-                    logProcessingStep(
-                      documentId,
-                      "DOCUMENT CLASSIFICATION",
-                      "Classifying document type and extracting structured data",
-                      {
-                        processedTextLength:
-                          processedResult.processedText.length,
-                      }
-                    );
-
-                    const classificationResult =
-                      await classifyDocumentAndExtractData(
-                        processedResult.processedText,
-                        documentId
-                      );
-
-                    // 4. Update document with processed data
-                    const updateData: DocumentUpdate = {
-                      ocr_status: "completed",
-                      processed_at: new Date().toISOString(),
-                    };
-
-                    if (classificationResult.success) {
-                      updateData.document_type =
-                        classificationResult.documentType;
-                      // Store raw text instead of JSON
-                      updateData.processed_text = processedResult.processedText;
-
-                      // Only keep essential metadata
-                      if (classificationResult.structuredData) {
-                        const data = classificationResult.structuredData;
-
-                        // Set title if available
-                        if (data.title || data.name) {
-                          updateData.title = data.title || data.name;
-                        }
-                      }
-
-                      logProcessingStep(
-                        documentId,
-                        "CLASSIFICATION RESULT",
-                        `Document classified as: ${classificationResult.documentType}`,
-                        { structuredData: classificationResult.structuredData }
-                      );
-                    }
-
-                    const { error: updateError2 } = await supabase
-                      .from("documents")
-                      .update(updateData)
-                      .eq("id", documentId);
-
-                    // 5. Generate embeddings for improved search
-                    logProcessingStep(
-                      documentId,
-                      "EMBEDDING GENERATION",
-                      "Creating vector embeddings for semantic search",
-                      {
-                        textForEmbeddings:
-                          processedResult.processedText.substring(0, 100) +
-                          "...",
-                      }
-                    );
-
-                    try {
-                      // Use the cleaned text for better quality embeddings and structured data for better chunking
-                      await createDocumentEmbeddings(
-                        documentId,
-                        processedResult.processedText,
-                        classificationResult.success
-                          ? classificationResult.structuredData
-                          : null
-                      );
-
-                      logProcessingStep(
-                        documentId,
-                        "PROCESS COMPLETE",
-                        "Document processing completed successfully!",
-                        { documentId, status: "completed" }
-                      );
-                    } catch (embeddingError) {
-                      logProcessingStep(
-                        documentId,
-                        "EMBEDDING ERROR",
-                        "Error creating embeddings, but continuing processing",
-                        {
-                          error:
-                            embeddingError instanceof Error
-                              ? embeddingError.message
-                              : String(embeddingError),
-                        }
-                      );
-                      // Don't fail the whole process if embeddings fail
-                    }
-                  } else {
-                    // If GPT processing failed, update status to partial
-                    logProcessingStep(
-                      documentId,
-                      "PROCESSING FALLBACK",
-                      "GPT processing failed, using raw text as fallback",
-                      {
-                        reason:
-                          processedResult.metadata.reason || "Unknown error",
-                      }
-                    );
-
-                    const { error: updateError3 } = await supabase
-                      .from("documents")
-                      .update({
-                        ocr_status: "fallback",
-                        processed_at: new Date().toISOString(),
-                        processed_text: extractedText, // Store the raw extracted text instead
-                      })
-                      .eq("id", documentId);
-
-                    // Still try to create embeddings with raw text
-                    logProcessingStep(
-                      documentId,
-                      "FALLBACK EMBEDDINGS",
-                      "Creating embeddings from raw OCR text"
-                    );
-
-                    await createDocumentEmbeddings(
-                      documentId,
-                      extractedText,
-                      null
-                    );
-                  }
-                } catch (processingError) {
-                  logProcessingStep(
-                    documentId,
-                    "PROCESSING ERROR",
-                    "Error in document processing pipeline",
-                    {
-                      error:
-                        processingError instanceof Error
-                          ? processingError.message
-                          : String(processingError),
-                    }
-                  );
-
-                  const { error: updateError4 } = await supabase
-                    .from("documents")
-                    .update({
-                      ocr_status: "error",
-                      processed_at: new Date().toISOString(),
-                      processed_text:
-                        extractedText ||
-                        "Error during document processing. Please try again.",
-                    })
-                    .eq("id", documentId);
-                }
+              // Final fallback if no text was extracted
+              if (!rawExtractedText || rawExtractedText.trim().length === 0) {
+                rawExtractedText =
+                  "No text could be extracted from the document. The document might be image-based, have security restrictions, or be in an unsupported format.";
+                console.warn("No text was extracted from document");
               }
 
               console.log(
-                "Full OCR response:",
-                JSON.stringify(resultData, null, 2)
+                `Successfully extracted ${rawExtractedText.length} characters of raw text`
               );
+
+              // Now use GPT to stitch the text together properly
+              let finalProcessedText = rawExtractedText;
+
+              if (rawExtractedText.length > 50) {
+                // Only process if we have meaningful text
+                try {
+                  console.log("Processing text with GPT to stitch together...");
+
+                  const stitchingPrompt = `
+You are a text formatting expert. Your task is to convert raw OCR output into clean, readable English text while preserving EVERY SINGLE WORD and piece of information.
+
+CRITICAL REQUIREMENTS:
+- PRESERVE ALL TEXT: Every word, number, symbol, and character from the raw OCR must appear in your output
+- DO NOT remove, omit, skip, or delete ANY content whatsoever
+- DO NOT summarize, condense, or shorten anything
+- DO NOT paraphrase or change the meaning
+- Your job is ONLY to clean up and organize the existing text
+
+WHAT YOU SHOULD DO:
+- Simply present all the raw OCR text in clean, readable English format
+- Fix obvious OCR scanning errors (like "teh" -> "the", "rn" -> "m", etc.)
+- Add proper punctuation and paragraph breaks where needed
+- Organize the text into readable sentences and paragraphs
+- Maintain the exact same information density and detail level
+- Present the content as simple, clear English text (NOT as a story or narrative)
+
+WHAT YOU MUST NOT DO:
+- Remove any information, no matter how repetitive or lengthy
+- Summarize or compress any sections
+- Skip over any details, names, numbers, or data
+- Change the original structure or sequence significantly
+- Add your own interpretations or explanations
+
+RAW OCR TEXT:
+${rawExtractedText}
+
+Please provide the complete formatted text that contains EVERY piece of information from the raw OCR, simply presented as clean, readable English text:`;
+                  const response = await openai.chat.completions.create({
+                    model: "gpt-4-0125-preview",
+                    messages: [{ role: "user", content: stitchingPrompt }],
+                    max_tokens: 4000,
+                    temperature: 0.1,
+                  });
+
+                  const stitchedText =
+                    response.choices[0]?.message?.content?.trim();
+
+                  if (stitchedText && stitchedText.length > 0) {
+                    finalProcessedText = stitchedText;
+                    console.log(
+                      `GPT processing successful. Final text length: ${finalProcessedText.length}`
+                    );
+                  } else {
+                    console.warn("GPT processing failed, using raw text");
+                  }
+                } catch (gptError) {
+                  console.error("Error processing text with GPT:", gptError);
+                  console.log("Using raw extracted text as fallback");
+                }
+              }
+
+              // Update document with processed text
+              const { error: updateError } = await supabase
+                .from("documents")
+                .update({
+                  ocr_status: "completed",
+                  processed_at: new Date().toISOString(),
+                  processed_text: finalProcessedText,
+                  ocr_confidence_score: confidence,
+                })
+                .eq("id", documentId);
+
+              if (updateError) {
+                console.error(
+                  "Error updating document with processed text:",
+                  updateError
+                );
+              } else {
+                console.log(
+                  "Document updated successfully, starting chunking and embedding..."
+                );
+
+                // Create embeddings for the processed text
+                try {
+                  await createDocumentEmbeddings(
+                    documentId,
+                    finalProcessedText,
+                    null // No structured data needed since we're using the full text
+                  );
+                  console.log("Document embeddings created successfully");
+                } catch (embeddingError) {
+                  console.error("Error creating embeddings:", embeddingError);
+                  // Don't fail the whole process if embeddings fail
+                }
+              }
+
               return {
-                text: extractedText,
+                text: finalProcessedText,
                 confidence: confidence,
                 entities: entities,
                 fullResponse: resultData,
@@ -814,7 +643,6 @@ const extractTextFromDocument = async (
                 `OCR processing failed: ${resultData.error || "Unknown error"}`
               );
             }
-            // If still processing, continue polling
           } else {
             console.error(
               `Error polling OCR results: ${resultResponse.status}`
@@ -849,434 +677,6 @@ const extractTextFromDocument = async (
     entities: [],
     fullResponse: { error: "Function reached end without returning" },
   };
-};
-
-// Calculate average confidence from pages
-const calculateAverageConfidence = (pages: any[]): number => {
-  if (!pages || pages.length === 0) return 0.5;
-
-  let totalConfidence = 0;
-  let totalBlocks = 0;
-
-  for (const page of pages) {
-    if (page.blocks) {
-      for (const block of page.blocks) {
-        totalConfidence += block.confidence || 0;
-        totalBlocks++;
-      }
-    }
-  }
-
-  return totalBlocks > 0 ? totalConfidence / totalBlocks : 0.5;
-};
-
-// Utility function to log structured data processing from GPT
-const logStructuredDataProcessing = (data: {
-  documentId: string;
-  originalText?: string;
-  processedText?: string | null;
-  error?: any;
-  status: "success" | "failure" | "skipped";
-  metadata?: Record<string, any>;
-}) => {
-  const timestamp = new Date().toISOString();
-  const logData = {
-    timestamp,
-    documentId: data.documentId,
-    status: data.status,
-    originalLength: data.originalText ? data.originalText.length : 0,
-    processedLength: data.processedText ? data.processedText.length : 0,
-    model: "gpt-3.5-turbo",
-    error: data.error
-      ? data.error instanceof Error
-        ? data.error.message
-        : String(data.error)
-      : undefined,
-    ...data.metadata,
-  };
-
-  // Log the structured data
-  console.log("GPT STRUCTURED DATA:", JSON.stringify(logData));
-
-  // You could also store this in a database or send to a monitoring service
-  // For now, we'll just log to console
-};
-
-// Define the metadata interface for GPT processing
-interface GPTProcessingMetadata {
-  documentId: string;
-  timestamp: string;
-  processingTime: number;
-  status: "success" | "failure" | "skipped";
-  model: string;
-  reason?: string;
-  error?: string;
-  characterCount?: number;
-  fullResponse?: any;
-  textSample?: {
-    firstChars: string;
-    lastChars: string;
-  };
-  [key: string]: any;
-}
-
-// Process text with GPT and return structured result with metadata
-export const processTextWithGPTStructured = async (
-  rawText: string,
-  documentId: string,
-  options: {
-    includeOriginalText?: boolean;
-    logFullResponse?: boolean;
-    additionalMetadata?: Record<string, any>;
-    documentType?: string; // Add document type hint
-  } = {}
-): Promise<{
-  success: boolean;
-  processedText: string | null;
-  originalText?: string;
-  metadata: GPTProcessingMetadata;
-}> => {
-  console.log(
-    `\n🎬 ENTERING processTextWithGPTStructured for document: ${documentId}`
-  );
-  console.log(`📥 Input params:`, {
-    textLength: rawText?.length || 0,
-    documentType: options.documentType,
-    includeOriginalText: options.includeOriginalText,
-    logFullResponse: options.logFullResponse,
-  });
-
-  const startTime = Date.now();
-  const metadata: GPTProcessingMetadata = {
-    documentId,
-    timestamp: new Date().toISOString(),
-    processingTime: 0, // Will be updated before return
-    status: "pending" as "success" | "failure" | "skipped",
-    model: "gpt-3.5-turbo",
-    ...(options.additionalMetadata || {}),
-  };
-
-  try {
-    console.log(
-      `🔍 VALIDATION CHECK: Text exists: ${!!rawText}, Length: ${rawText?.length || 0}`
-    );
-
-    if (!rawText || rawText.trim().length === 0) {
-      console.warn("⚠️ EARLY EXIT: No text provided for GPT processing");
-
-      metadata.status = "skipped";
-      metadata.reason = "Empty input text";
-      metadata.processingTime = Date.now() - startTime;
-
-      logStructuredDataProcessing({
-        documentId,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        processedText: null,
-        status: "skipped",
-        metadata: { reason: "Empty input text" },
-      });
-
-      return {
-        success: false,
-        processedText: null,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        metadata,
-      };
-    }
-
-    console.log(
-      `✅ VALIDATION PASSED: Processing text with GPT for document: ${documentId}`
-    );
-    console.log(`📊 Original text length: ${rawText.length} characters`);
-
-    // If text is very short, no need to process
-    if (rawText.length < 100) {
-      console.log(
-        "⚠️ EARLY EXIT: Text too short for GPT processing, using as is"
-      );
-
-      metadata.status = "skipped";
-      metadata.reason = "Text too short";
-      metadata.processingTime = Date.now() - startTime;
-
-      logStructuredDataProcessing({
-        documentId,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        processedText: rawText,
-        status: "skipped",
-        metadata: { reason: "Text too short" },
-      });
-
-      return {
-        success: true,
-        processedText: rawText,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        metadata,
-      };
-    }
-
-    console.log(
-      `🔄 PROCEEDING TO GPT PROCESSING: Text length is sufficient (${rawText.length} chars)`
-    );
-    console.log(
-      `🎯 Sample text (first 300 chars): ${rawText.substring(0, 300)}...`
-    );
-
-    // Get existing document type from database if not provided in options
-    let currentDocType = options.documentType;
-    console.log(`📄 Document type from options: ${currentDocType || "none"}`);
-
-    if (!currentDocType) {
-      try {
-        console.log(
-          `🔍 Fetching document type from database for id: ${documentId}`
-        );
-        const { data, error } = await supabase
-          .from("documents")
-          .select("document_type")
-          .eq("id", documentId)
-          .single();
-
-        if (error) {
-          console.log(`❌ Error fetching document type: ${error.message}`);
-        }
-
-        if (!error && data && data.document_type) {
-          currentDocType = data.document_type;
-          console.log(
-            `✅ Using existing document type from database: ${currentDocType}`
-          );
-        } else {
-          console.log(`ℹ️ No document type found in database`);
-        }
-      } catch (err) {
-        // Ignore error, we'll proceed without document type
-        console.log(
-          `❌ Exception retrieving document type: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
-
-    // Include document type hint in the prompt if available
-    const documentTypeHint = currentDocType
-      ? `\nIMPORTANT: This document appears to be a "${currentDocType}". Consider this document type in your analysis.`
-      : "";
-
-    console.log(`🏷️ Document type hint: ${documentTypeHint || "none"}`);
-
-    // Ensure we're going to make a valid API call with proper parameters
-    console.log(`⚙️ Pre-API call validation checks:`);
-    console.log(`- Text length: ${rawText.length}`);
-    console.log(`- Document ID: ${documentId}`);
-    console.log(`- Document type: ${currentDocType || "unknown"}`);
-    console.log(`- OpenAI Client initialized: ${!!openai}`);
-    console.log(`- API Key available: ${!!finalApiKey}`);
-
-    // Prepare prompt for GPT with simpler output format
-    const prompt = `
-Analyze this document and extract the key information in a simple, readable format.
-
-Document text:
-${rawText.slice(0, 15000)}
-
-Focus only on the important and specific information from this document. Ignore any generic content, disclaimers, or standard text that would appear in similar documents.
-
-Organize your response as a simple, continuous narrative that flows naturally. Use everyday language without complex formatting or technical jargon. Do not include warnings, cautions, or general disclaimers.
-
-First, briefly identify what type of document this is. Then, summarize the core information and key details that matter most. Include any relevant names, dates, numbers, and specific details unique to this document.
-
-Write your response as if you're explaining the document to someone in a casual conversation. Your output should be plain text only - DO NOT include any JSON or structured format in your response.
-
-IMPORTANT: Do not use JSON format in your response. Use only plain text output.
-`;
-
-    // Time this section to detect hanging
-    const preApiCallTime = Date.now();
-
-    // Verify and log the actual API key value (securely, just first few chars)
-    const apiKey = config.openai.apiKey;
-    console.log(`🔑 OpenAI API Key status: ${apiKey ? "Found" : "Missing"}`);
-    if (apiKey) {
-      console.log(`🔑 API Key prefix: ${apiKey.substring(0, 8)}...`);
-      console.log(`🔑 API Key length: ${apiKey.length} characters`);
-    } else {
-      throw new Error("OpenAI API key is not configured");
-    }
-
-    try {
-      // Create new OpenAI instance with explicit API key to ensure it's used
-      console.log(`🔨 Creating new OpenAI instance with explicit API key...`);
-
-      const openaiWithKey = new OpenAI({
-        apiKey: apiKey,
-        dangerouslyAllowBrowser: true,
-      });
-
-      console.log(`✅ OpenAI client created successfully`);
-      console.log(`⏱️ Time to create client: ${Date.now() - preApiCallTime}ms`);
-      console.log(`🚀 Making OpenAI API call...`);
-      const apiStartTime = Date.now();
-
-      // Add timeout to detect hanging API calls
-      const API_TIMEOUT_MS = 30000; // 30 seconds
-      let apiCallTimedOut = false;
-
-      // Create timeout for the API call
-      const apiTimeoutId = setTimeout(() => {
-        apiCallTimedOut = true;
-        console.error(
-          `⏰ API CALL TIMEOUT: OpenAI call took more than ${API_TIMEOUT_MS / 1000} seconds!`
-        );
-        console.error(
-          `This suggests a network issue, API problem, or some other blocking condition.`
-        );
-      }, API_TIMEOUT_MS);
-
-      // Fallback to a simpler prompt if the main one is too large
-      const effectivePrompt =
-        prompt.length > 12000
-          ? `Extract key information from this document: ${rawText.substring(0, 5000)}...`
-          : prompt;
-
-      console.log(
-        `📏 Using prompt with length: ${effectivePrompt.length} characters`
-      );
-
-      console.log(`⏱️ About to call OpenAI API at ${new Date().toISOString()}`);
-
-      const response = await openaiWithKey.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: effectivePrompt }],
-        max_tokens: 2000,
-        temperature: 0.1,
-      });
-
-      // Clear the timeout since we got a response
-      clearTimeout(apiTimeoutId);
-
-      if (apiCallTimedOut) {
-        console.log(`⚠️ API call completed after timeout was triggered`);
-      }
-
-      const apiEndTime = Date.now();
-      console.log(
-        `⏱️ OpenAI API call completed in ${apiEndTime - apiStartTime}ms`
-      );
-
-      console.log(`📥 OpenAI Response received:`, {
-        id: response.id,
-        model: response.model,
-        usage: response.usage,
-        choicesLength: response.choices?.length || 0,
-        finishReason: response.choices?.[0]?.finish_reason,
-      });
-
-      const processedText = response.choices?.[0]?.message?.content?.trim();
-
-      console.log(
-        `📤 Processed text length: ${processedText?.length || 0} characters`
-      );
-      console.log(
-        `🎯 First 200 chars of processed text: ${processedText?.substring(0, 200) || "NO TEXT"}...`
-      );
-
-      if (!processedText) {
-        console.error(`❌ No processed text received from GPT!`);
-        console.error(
-          `🔍 Full response object:`,
-          JSON.stringify(response, null, 2)
-        );
-        throw new Error("No processed text received from GPT");
-      }
-
-      metadata.status = "success";
-      metadata.processingTime = Date.now() - startTime;
-      metadata.characterCount = processedText.length;
-      metadata.fullResponse = {
-        id: response.id,
-        model: response.model,
-        usage: response.usage,
-        finishReason: response.choices?.[0]?.finish_reason,
-      };
-
-      console.log(`✅ GPT processing successful for document: ${documentId}`);
-      console.log(`📈 Processing stats:`, {
-        totalTime: metadata.processingTime,
-        apiTime: apiEndTime - apiStartTime,
-        inputLength: rawText.length,
-        outputLength: processedText.length,
-        tokenUsage: response.usage,
-      });
-
-      logStructuredDataProcessing({
-        documentId,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        processedText,
-        status: "success",
-        metadata: { processingTime: metadata.processingTime },
-      });
-
-      console.log(`🎉 RETURNING SUCCESS RESULT for document: ${documentId}`);
-      console.log(
-        `📦 Final result preview: ${processedText.substring(0, 200)}...`
-      );
-
-      return {
-        success: true,
-        processedText,
-        originalText: options.includeOriginalText ? rawText : undefined,
-        metadata,
-      };
-    } catch (apiError: any) {
-      console.error(`💥 OpenAI API Error for document ${documentId}:`, {
-        errorMessage: apiError.message,
-        errorType: apiError.constructor.name,
-        errorCode: apiError.code,
-        errorStatus: apiError.status,
-        errorHeaders: apiError.headers,
-        fullError: JSON.stringify(apiError, null, 2),
-      });
-
-      // Re-throw the error to be caught by the outer try-catch
-      throw new Error(
-        `OpenAI API failed: ${apiError.message || "Unknown error"}`
-      );
-    }
-  } catch (error) {
-    console.error(
-      `💥 MAJOR ERROR in processTextWithGPTStructured for document: ${documentId}`
-    );
-    console.error(`🔍 Error details:`, {
-      errorMessage: error instanceof Error ? error.message : String(error),
-      errorType: error instanceof Error ? error.constructor.name : typeof error,
-      errorStack: error instanceof Error ? error.stack : "No stack trace",
-      documentId,
-      textLength: rawText?.length || 0,
-      processingTime: Date.now() - startTime,
-    });
-
-    metadata.status = "failure";
-    metadata.processingTime = Date.now() - startTime;
-    metadata.error = error instanceof Error ? error.message : String(error);
-
-    logStructuredDataProcessing({
-      documentId,
-      originalText: options.includeOriginalText ? rawText : undefined,
-      processedText: null,
-      status: "failure",
-      error,
-      metadata,
-    });
-
-    console.error(`🏁 RETURNING FAILURE RESULT for document: ${documentId}`);
-
-    return {
-      success: false,
-      processedText: null,
-      originalText: options.includeOriginalText ? rawText : undefined,
-      metadata,
-    };
-  }
 };
 
 // Format storage size helper function
@@ -1785,11 +1185,8 @@ export const documentQueries = {
     similarities: number[];
   }> => {
     try {
-      // Process the query to expand it slightly for better matches
-      const enhancedQuery = await enhanceSearchQuery(query);
-
       // Create embedding for the query
-      const queryEmbedding = await createEmbedding(enhancedQuery);
+      const queryEmbedding = await createEmbedding(query);
 
       // Set dynamic threshold based on query complexity
       const defaultThreshold = options.minThreshold || 0.65; // Lower from 0.7 for better recall
@@ -1959,21 +1356,6 @@ export const documentQueries = {
   },
 };
 
-// Process text with GPT to improve structure and content for embeddings
-const processTextWithGPT = async (
-  rawText: string,
-  documentId: string
-): Promise<string | null> => {
-  try {
-    // Use the new structured implementation instead
-    const result = await processTextWithGPTStructured(rawText, documentId);
-    return result.processedText;
-  } catch (error: any) {
-    console.error("Error in legacy processTextWithGPT:", error);
-    return null;
-  }
-};
-
 // Helper function to update user stats after document deletion - fixed for numeric storage
 const updateUserStatsAfterDeletion = async (
   userId: string,
@@ -2041,13 +1423,6 @@ const updateUserStatsAfterDeletion = async (
   }
 };
 
-// Helper function to enhance search query
-const enhanceSearchQuery = async (query: string): Promise<string> => {
-  // For simple implementation, just return the original query
-  // In a future enhancement, this could use GPT to expand the query
-  return query;
-};
-
 // Helper function to rank search results with weighted scoring
 const rankSearchResults = (results: SearchResult[]): SearchResult[] => {
   return results
@@ -2070,181 +1445,6 @@ const rankSearchResults = (results: SearchResult[]): SearchResult[] => {
       return result;
     })
     .sort((a, b) => b.similarity - a.similarity);
-};
-
-/**
- * Classify document type and extract structured data using GPT
- *
- * This function analyzes the processed text from a document and:
- * 1. Determines the document type (e.g., invoice, resume, contract)
- * 2. Extracts structured data specific to that document type
- *
- * @param processedText - The cleaned and processed text from GPT
- * @param documentId - The ID of the document being processed
- * @returns Classification results including document type and structured data
- */
-const classifyDocumentAndExtractData = async (
-  processedText: string,
-  documentId: string
-): Promise<{
-  success: boolean;
-  documentType: string;
-  structuredData: any;
-  confidence: number;
-}> => {
-  try {
-    logProcessingStep(
-      documentId,
-      "CLASSIFICATION",
-      "Starting document classification and data extraction",
-      { textLength: processedText.length }
-    );
-
-    // Default values
-    const defaultResult = {
-      success: false,
-      documentType: "unknown",
-      structuredData: {},
-      confidence: 0,
-    };
-
-    if (!processedText || processedText.trim().length === 0) {
-      console.error("No text provided for classification");
-      return defaultResult;
-    }
-
-    // Prepare the prompt for GPT to classify the document and extract data with simplified format
-    const prompt = `
-Analyze this document to identify its type and key information.
-
-DOCUMENT TEXT:
-${processedText.substring(0, 10000)}
-
-First, determine what type of document this is from these categories:
-- Invoice/Receipt
-- Resume/CV
-- Contract/Agreement
-- Medical Record
-- Financial Statement
-- Legal Document
-- Academic Paper
-- Report
-- Letter/Email
-- ID Document
-- Certificate
-- Other (please specify)
-
-Then, extract the most relevant data from the document that would be useful for searching and organizing it.
-
-OUTPUT FORMAT:
-Respond with plain text in the following format:
-
-Document Type: [the document type]
-Confidence: [0.X]
-Structured Data:
-[Key]: [Value]
-[Key]: [Value]
-...
-
-Do not use JSON format for your response. Use plain text with key-value pairs.
-`;
-
-    console.log("Calling OpenAI for document classification...");
-    console.log(`Prompt length: ${prompt.length} chars`);
-
-    // Call OpenAI API
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 1500,
-      temperature: 0.2,
-    });
-
-    const responseText = response.choices[0]?.message?.content?.trim();
-
-    if (!responseText) {
-      console.error("No response received from OpenAI for classification");
-      return defaultResult;
-    }
-
-    console.log(
-      `Received classification response: ${responseText.substring(0, 200)}...`
-    );
-
-    try {
-      // Parse the plain text response
-      const lines = responseText
-        .split("\n")
-        .filter((line) => line.trim().length > 0);
-      let documentType = "unknown";
-      let confidence = 0.5;
-      const structuredData: Record<string, any> = {};
-
-      let inStructuredDataSection = false;
-
-      for (const line of lines) {
-        if (line.toLowerCase().startsWith("document type:")) {
-          documentType = line.substring("document type:".length).trim();
-        } else if (line.toLowerCase().startsWith("confidence:")) {
-          const confidenceValue = parseFloat(
-            line.substring("confidence:".length).trim()
-          );
-          if (!isNaN(confidenceValue)) {
-            confidence = confidenceValue;
-          }
-        } else if (line.toLowerCase() === "structured data:") {
-          inStructuredDataSection = true;
-        } else if (inStructuredDataSection) {
-          // Parse key-value pairs
-          const colonIndex = line.indexOf(":");
-          if (colonIndex > 0) {
-            const key = line.substring(0, colonIndex).trim();
-            const value = line.substring(colonIndex + 1).trim();
-            structuredData[key] = value;
-          }
-        }
-      }
-
-      logProcessingStep(
-        documentId,
-        "CLASSIFICATION COMPLETE",
-        `Document classified as: ${documentType}`,
-        { confidence: confidence }
-      );
-
-      return {
-        success: true,
-        documentType: documentType || "unknown",
-        structuredData: structuredData || {},
-        confidence: confidence || 0.5,
-      };
-    } catch (parseError) {
-      console.error("Error parsing classification response:", parseError);
-      console.log("Response that failed to parse:", responseText);
-
-      // Try to extract document type from text if parsing failed
-      const typeMatch = responseText.match(/document type:?\s*([a-z0-9\s/]+)/i);
-      const documentType = typeMatch ? typeMatch[1].trim() : "unknown";
-
-      // Use the text as structured data
-      return {
-        success: false,
-        documentType,
-        structuredData: {
-          summary: responseText || processedText.substring(0, 500) + "...",
-        },
-        confidence: 0.3,
-      };
-    }
-  } catch (error) {
-    console.error("Error in document classification:", error);
-    return {
-      success: false,
-      documentType: "unknown",
-      structuredData: {},
-      confidence: 0,
-    };
-  }
 };
 
 /**
@@ -2308,23 +1508,188 @@ const createDocumentEmbeddings = async (
     // Prioritize chunking the full text with overlap
     console.log("Using enhanced text chunking with overlap");
     try {
-      // Use a higher overlap ratio for better context preservation
-      const maxTokens = 1000;
-      const overlap = 300; // Increased overlap for better context preservation
+      // Use smaller chunks and higher overlap ratio for better context preservation
+      const maxTokens = 500; // Smaller chunk size (was 1000)
+      const overlap = 200; // Higher overlap (was 300 but with smaller chunks this is proportionally higher)
 
       // Use await to handle the async function properly
       chunks = await chunkText(textToChunk, maxTokens, overlap);
+
+      // If we only have one large chunk, force split it into smaller chunks
+      if (chunks.length <= 1 && textToChunk.length > 1000) {
+        console.log("Text resulted in only one chunk, forcing smaller chunks");
+
+        // Split by paragraphs first
+        let paragraphChunks = textToChunk
+          .split(/\n\s*\n/)
+          .filter((chunk) => chunk.trim().length > 0);
+
+        // If we have multiple paragraphs, use those
+        if (paragraphChunks.length > 1) {
+          chunks = paragraphChunks;
+          console.log(`Created ${chunks.length} paragraph-based chunks`);
+        } else {
+          // Force splitting by sentences with overlap
+          const sentences = textToChunk
+            .split(/[.!?]+/)
+            .filter((s) => s.trim().length > 0);
+          chunks = [];
+          const sentencesPerChunk = 5; // Aim for ~5 sentences per chunk
+          const sentenceOverlap = 2; // Overlap of 2 sentences between chunks
+
+          for (
+            let i = 0;
+            i < sentences.length;
+            i += sentencesPerChunk - sentenceOverlap
+          ) {
+            if (i < 0) i = 0; // Safety check
+
+            // Take sentencesPerChunk sentences, but don't go past the end
+            const endIdx = Math.min(i + sentencesPerChunk, sentences.length);
+            const chunkSentences = sentences.slice(i, endIdx);
+
+            // Join sentences back together
+            const chunk =
+              chunkSentences.join(". ") +
+              (chunkSentences.length > 0 ? "." : "");
+
+            if (chunk.trim().length > 0) {
+              chunks.push(chunk.trim());
+            }
+
+            // Stop if we've processed all sentences
+            if (endIdx >= sentences.length) break;
+          }
+
+          console.log(
+            `Created ${chunks.length} sentence-based chunks with overlap`
+          );
+        }
+      }
+
+      // If chunks are too large, split them further
+      const maxChunkLength = 1500; // ~375 tokens
+      const finalChunks: string[] = [];
+
+      for (const chunk of chunks) {
+        if (chunk.length <= maxChunkLength) {
+          finalChunks.push(chunk);
+        } else {
+          // Split large chunks into smaller pieces with overlap
+          let startIdx = 0;
+          const overlapChars = 250; // Characters to overlap
+
+          while (startIdx < chunk.length) {
+            const endIdx = Math.min(startIdx + maxChunkLength, chunk.length);
+            finalChunks.push(chunk.substring(startIdx, endIdx));
+
+            // Move start position forward, accounting for overlap
+            startIdx += maxChunkLength - overlapChars;
+
+            // Make sure we're making progress
+            if (startIdx < endIdx - overlapChars) {
+              startIdx = endIdx - overlapChars;
+            }
+
+            // Stop if we've reached the end
+            if (startIdx >= chunk.length) break;
+          }
+        }
+      }
+
+      // Replace original chunks with the final processed chunks
+      chunks = finalChunks;
+
       console.log(
         `Successfully created ${chunks.length} overlapping chunks from text`
       );
     } catch (chunkingError) {
       console.error("Error during text chunking:", chunkingError);
-      // If chunking fails, use a simple fallback - split by paragraphs
-      chunks = textToChunk
+
+      // First try paragraph-based chunking as fallback
+      const paragraphChunks = textToChunk
         .split(/\n\s*\n/)
         .filter((chunk) => chunk.trim().length > 0);
+
+      // If we have enough paragraphs, use those
+      if (paragraphChunks.length > 3) {
+        console.log(`Using ${paragraphChunks.length} paragraphs as chunks`);
+
+        // Process paragraphs to ensure they're not too large
+        chunks = [];
+        const maxParagraphLength = 1500; // ~375 tokens
+
+        for (const paragraph of paragraphChunks) {
+          if (paragraph.length <= maxParagraphLength) {
+            chunks.push(paragraph);
+          } else {
+            // Split large paragraphs with overlap
+            let startIdx = 0;
+            const overlapChars = 200;
+
+            while (startIdx < paragraph.length) {
+              const endIdx = Math.min(
+                startIdx + maxParagraphLength,
+                paragraph.length
+              );
+              chunks.push(paragraph.substring(startIdx, endIdx));
+              startIdx += maxParagraphLength - overlapChars;
+            }
+          }
+        }
+      } else {
+        // Fall back to sentence-based chunking with overlap
+        console.log(
+          "Using sentence-based chunking with overlap as final fallback"
+        );
+        const sentences = textToChunk
+          .split(/[.!?]+/)
+          .filter((s) => s.trim().length > 0);
+        chunks = [];
+
+        if (sentences.length > 0) {
+          const sentencesPerChunk = 5; // Aim for ~5 sentences per chunk
+          const sentenceOverlap = 2; // Overlap of 2 sentences
+
+          for (
+            let i = 0;
+            i < sentences.length;
+            i += sentencesPerChunk - sentenceOverlap
+          ) {
+            if (i < 0) i = 0; // Safety check
+
+            // Take sentencesPerChunk sentences, but don't go past the end
+            const endIdx = Math.min(i + sentencesPerChunk, sentences.length);
+            const chunkSentences = sentences.slice(i, endIdx);
+
+            // Join sentences back together with period
+            const chunk =
+              chunkSentences.join(". ") +
+              (chunkSentences.length > 0 ? "." : "");
+
+            if (chunk.trim().length > 0) {
+              chunks.push(chunk.trim());
+            }
+          }
+        } else {
+          // If even sentence splitting fails, use character-based chunking
+          const chunkSize = 1000;
+          const overlap = 200;
+
+          for (let i = 0; i < textToChunk.length; i += chunkSize - overlap) {
+            const chunk = textToChunk.substring(
+              i,
+              Math.min(i + chunkSize, textToChunk.length)
+            );
+            if (chunk.trim().length > 0) {
+              chunks.push(chunk);
+            }
+          }
+        }
+      }
+
       console.log(
-        `Created ${chunks.length} simple paragraph chunks as fallback`
+        `Created ${chunks.length} chunks with improved fallback method`
       );
     }
 
